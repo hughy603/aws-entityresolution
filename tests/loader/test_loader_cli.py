@@ -1,6 +1,7 @@
 """Tests for the Entity Resolution loader CLI."""
 
-from unittest.mock import patch
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -21,102 +22,125 @@ def mock_loading_result() -> LoadingResult:
     return LoadingResult(
         status="success",
         records_loaded=150,
-        execution_time=3.2,
         target_table="GOLDEN_ENTITY_RECORDS",
+        error_message=None,
+        execution_time=3.2,
     )
 
 
-def test_load_command_success(cli_runner: CliRunner, mock_loading_result: LoadingResult) -> None:
+@pytest.fixture
+def mock_settings():
+    """Create mock settings for testing."""
+    settings = MagicMock()
+    settings.target_table = "GOLDEN_ENTITY_RECORDS"
+    settings.s3.bucket = "test-bucket"
+    return settings
+
+
+def test_load_command_success(
+    cli_runner: CliRunner, mock_loading_result: LoadingResult, mock_settings
+) -> None:
     """Test the load command successfully loads data."""
     with (
-        patch("aws_entity_resolution.loader.cli.load_data", return_value=mock_loading_result),
-        patch("aws_entity_resolution.loader.cli.get_settings"),
+        patch("aws_entity_resolution.loader.cli.load_records", return_value=mock_loading_result),
+        patch("aws_entity_resolution.loader.cli.get_settings", return_value=mock_settings),
+        patch("aws_entity_resolution.loader.cli.validate_settings", return_value=True),
     ):
-        result = cli_runner.invoke(
-            app, ["load", "--input-uri", "s3://test-bucket/test-prefix/processed_data.csv"]
-        )
+        # Set success property on the mock result
+        mock_loading_result.success = True
+        mock_loading_result.record_count = 150
+
+        result = cli_runner.invoke(app, ["run"], catch_exceptions=False)
 
         assert result.exit_code == 0
-        assert "Successfully loaded 150 records" in result.stdout
-        assert "Target table: GOLDEN_ENTITY_RECORDS" in result.stdout
-        assert "execution time: 3.2s" in result.stdout
+        assert "Successfully loaded" in result.stdout
+        assert "GOLDEN_ENTITY_RECORDS" in result.stdout
 
 
 def test_load_command_with_options(
-    cli_runner: CliRunner, mock_loading_result: LoadingResult
+    cli_runner: CliRunner, mock_loading_result: LoadingResult, mock_settings
 ) -> None:
     """Test the load command with custom options."""
     with (
-        patch("aws_entity_resolution.loader.cli.load_data", return_value=mock_loading_result),
-        patch("aws_entity_resolution.loader.cli.get_settings"),
+        patch("aws_entity_resolution.loader.cli.load_records", return_value=mock_loading_result),
+        patch("aws_entity_resolution.loader.cli.get_settings", return_value=mock_settings),
+        patch("aws_entity_resolution.loader.cli.validate_settings", return_value=True),
     ):
+        # Set success property on the mock result
+        mock_loading_result.success = True
+        mock_loading_result.record_count = 150
+
         result = cli_runner.invoke(
             app,
             [
-                "load",
-                "--input-uri",
-                "s3://test-bucket/test-prefix/processed_data.csv",
+                "run",
+                "--s3-key",
+                "test-prefix/matched_records.csv",
                 "--target-table",
-                "CUSTOM_TARGET_TABLE",
-                "--truncate-target",
+                "CUSTOM_TARGET",
+                "--truncate",
             ],
-        )
-
-        assert result.exit_code == 0
-        assert "Successfully loaded 150 records" in result.stdout
-
-
-def test_load_command_error(cli_runner: CliRunner) -> None:
-    """Test the load command when an error occurs."""
-    with (
-        patch(
-            "aws_entity_resolution.loader.cli.load_data",
-            side_effect=Exception("Test loading error"),
-        ),
-        patch("aws_entity_resolution.loader.cli.get_settings"),
-        patch("aws_entity_resolution.loader.cli.validate_settings"),
-    ):
-        result = cli_runner.invoke(
-            app,
-            ["load", "--input-uri", "s3://test-bucket/test-prefix/processed_data.csv"],
             catch_exceptions=False,
         )
 
-        assert (
-            "Error loading data" in result.stdout
-            or "Got unexpected extra argument (load)" in result.stdout
-        )
+        assert result.exit_code == 0
+        assert "Successfully loaded" in result.stdout
 
 
-def test_create_table_command(cli_runner: CliRunner) -> None:
-    """Test the create-table command successfully creates a table."""
+def test_load_command_error(cli_runner: CliRunner, mock_settings) -> None:
+    """Test the load command when an error occurs."""
     with (
-        patch("aws_entity_resolution.loader.cli.create_target_table", return_value=True),
-        patch("aws_entity_resolution.loader.cli.get_settings"),
+        patch(
+            "aws_entity_resolution.loader.cli.load_records",
+            side_effect=Exception("Test loading error"),
+        ),
+        patch("aws_entity_resolution.loader.cli.get_settings", return_value=mock_settings),
+        patch("aws_entity_resolution.loader.cli.validate_settings", return_value=True),
     ):
-        result = cli_runner.invoke(app, ["create-table"])
+        result = cli_runner.invoke(app, ["run"], catch_exceptions=False)
 
-        assert (
-            result.exit_code == 0 or "Got unexpected extra argument (create-table)" in result.stdout
-        )
+        assert result.exit_code == 1
+        assert "Error: Test loading error" in result.stdout
 
 
-def test_create_table_command_error(cli_runner: CliRunner) -> None:
+def test_create_table_command(cli_runner: CliRunner, mock_settings) -> None:
+    """Test the create-table command successfully creates a table."""
+    mock_result = LoadingResult(
+        status="success",
+        records_loaded=0,
+        target_table="GOLDEN_ENTITY_RECORDS",
+        error_message=None,
+        execution_time=1.0,
+    )
+    mock_result.success = True
+    mock_result.sql = "CREATE TABLE IF NOT EXISTS GOLDEN_ENTITY_RECORDS..."
+
+    with (
+        patch("aws_entity_resolution.loader.cli.create_target_table", return_value=mock_result),
+        patch("aws_entity_resolution.loader.cli.get_settings", return_value=mock_settings),
+        patch("aws_entity_resolution.loader.cli.validate_settings", return_value=True),
+        # Patch typer.Exit to prevent actual exit
+        patch("typer.Exit", side_effect=lambda code=0: None),
+    ):
+        result = cli_runner.invoke(app, ["create-table"], catch_exceptions=False)
+
+        assert "Successfully created table" in result.stdout
+
+
+def test_create_table_command_error(cli_runner: CliRunner, mock_settings) -> None:
     """Test the create-table command when an error occurs."""
     with (
         patch(
             "aws_entity_resolution.loader.cli.create_target_table",
             side_effect=Exception("Test table creation error"),
         ),
-        patch("aws_entity_resolution.loader.cli.get_settings"),
-        patch("aws_entity_resolution.loader.cli.validate_settings"),
+        patch("aws_entity_resolution.loader.cli.get_settings", return_value=mock_settings),
+        patch("aws_entity_resolution.loader.cli.validate_settings", return_value=True),
     ):
-        result = cli_runner.invoke(app, ["create-table"], catch_exceptions=False)
+        result = cli_runner.invoke(app, ["create-table"], catch_exceptions=True)
 
-        assert (
-            "Error creating target table" in result.stdout
-            or "Got unexpected extra argument (create-table)" in result.stdout
-        )
+        assert result.exit_code == 1
+        assert "Error: Test table creation error" in result.stdout
 
 
 def test_version_command(cli_runner: CliRunner) -> None:

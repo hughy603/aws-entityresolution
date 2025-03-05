@@ -46,6 +46,12 @@ def extract(
         "-t",
         help="Override source table name from environment variable",
     ),
+    query: Optional[str] = typer.Option(
+        None,
+        "--query",
+        "-q",
+        help="Custom SQL query to extract data (overrides source table)",
+    ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -56,27 +62,40 @@ def extract(
     """Extract entity data from Snowflake to S3."""
     settings = get_settings()
 
+    if not validate_settings(settings):
+        raise typer.Exit(1)
+
     # Override source table if provided
     if source_table:
         settings.source_table = source_table
 
-    if not validate_settings(settings):
-        raise typer.Exit(1)
-
     try:
-        logger.info("Starting extraction process")
-        result = extract_data(settings, dry_run=dry_run)
+        # Log the extraction parameters
+        log_event(
+            logger,
+            "Starting data extraction",
+            {
+                "source_table": settings.source_table,
+                "s3_bucket": settings.s3.bucket,
+                "dry_run": dry_run,
+            },
+        )
+
+        # Extract the data
+        result = extract_data(settings, query=query, dry_run=dry_run)
 
         if result.success:
-            typer.echo(f"Extraction completed successfully: {result.output_path}")
-            if result.record_count > 0:
-                typer.echo(f"Extracted {result.record_count} records")
+            typer.echo(
+                f"Successfully extracted {result.record_count} records to {result.output_path}"
+            )
+            if dry_run:
+                typer.echo("This was a dry run. No data was actually extracted.")
         else:
-            typer.echo(f"Extraction failed: {result.error_message}", err=True)
+            typer.echo(f"Error extracting data: {result.error_message}", err=True)
             raise typer.Exit(1)
+
     except Exception as e:
-        logger.exception("Error during extraction")
-        typer.echo(f"Error during extraction: {str(e)}", err=True)
+        typer.echo(f"Error: {str(e)}", err=True)
         raise typer.Exit(1)
 
 

@@ -8,27 +8,41 @@ import typer
 
 from aws_entity_resolution.config import Settings, get_settings
 from aws_entity_resolution.services import EntityResolutionService
+from aws_entity_resolution.utils import get_logger, log_event
 
 from .processor import process_data
 
 app = typer.Typer(help="Process entity data through AWS Entity Resolution")
+logger = get_logger(__name__)
 
 # Version information
 __version__ = "0.1.0"
 
 
-def validate_settings(settings: Settings) -> None:
-    """Validate required settings are present."""
+def validate_settings(settings: Optional[Settings] = None) -> bool:
+    """Validate required settings are present.
+
+    Returns:
+        bool: True if settings are valid, False otherwise.
+    """
+    if settings is None:
+        settings = get_settings()
+
+    missing = []
+
     if not settings.entity_resolution.workflow_name:
-        typer.echo("Error: ER_WORKFLOW_NAME environment variable is required", err=True)
-        raise typer.Exit(1)
+        missing.append("ER_WORKFLOW_NAME")
 
     if not settings.s3.bucket:
-        typer.echo("Error: S3_BUCKET_NAME environment variable is required", err=True)
-        raise typer.Exit(1)
+        missing.append("S3_BUCKET_NAME")
+
+    if missing:
+        typer.echo(f"Error: Missing required environment variables: {', '.join(missing)}", err=True)
+        return False
+    return True
 
 
-@app.command()
+@app.command("run")
 def process(
     dry_run: bool = typer.Option(
         False,
@@ -49,42 +63,44 @@ def process(
     try:
         # Get settings from environment variables
         settings = get_settings()
-        validate_settings(settings)
 
-        if dry_run:
-            typer.echo("Dry run mode - would process with:")
-            typer.echo(f"  Workflow: {settings.entity_resolution.workflow_name}")
-            typer.echo(f"  Input bucket: s3://{settings.s3.bucket}/{settings.s3.prefix}")
-            typer.echo(
-                f"  Entity attributes: {', '.join(settings.entity_resolution.entity_attributes)}"
-            )
-            return
-
-        # Process data
-        result = process_data(settings, dry_run=dry_run)
-        if result.status == "success":
-            typer.echo(
-                f"Successfully processed {result.input_records} records, found {result.matched_records} matches"
-            )
-            typer.echo(f"Matched: {result.matched_records}")
-            unique_count = result.input_records - result.matched_records
-            typer.echo(f"Unique: {unique_count}")
-            typer.echo(f"Results written to: s3://{result.s3_bucket}/{result.s3_key}")
-        else:
-            typer.echo(f"Error: {result.error_message}", err=True)
+        if not validate_settings(settings):
             raise typer.Exit(1)
 
-    except boto3.exceptions.Boto3Error as e:
-        typer.echo(f"AWS error: {e!s}", err=True)
-        typer.echo("Error processing data", err=True)
-        raise typer.Exit(1)
-    except RuntimeError as e:
-        typer.echo(f"Error processing data: {e!s}", err=True)
-        typer.echo("Error processing data", err=True)
-        raise typer.Exit(1)
+        # Log the processing parameters
+        log_event(
+            logger,
+            "Starting data processing",
+            {
+                "workflow_name": settings.entity_resolution.workflow_name,
+                "s3_bucket": settings.s3.bucket,
+                "dry_run": dry_run,
+                "wait": wait,
+            },
+        )
+
+        # Process the data
+        result = process_data(
+            settings,
+            dry_run=dry_run,
+            wait=wait,
+            input_uri=input_uri,
+            output_file=output_file,
+            matching_threshold=matching_threshold,
+        )
+
+        if result.success:
+            typer.echo(f"Successfully processed data: {result.output_path}")
+            if result.job_id:
+                typer.echo(f"Job ID: {result.job_id}")
+            if dry_run:
+                typer.echo("This was a dry run. No data was actually processed.")
+        else:
+            typer.echo(f"Error processing data: {result.error_message}", err=True)
+            raise typer.Exit(1)
+
     except Exception as e:
-        typer.echo(f"Unexpected error: {e!s}", err=True)
-        typer.echo("Error processing data", err=True)
+        typer.echo(f"Error: {str(e)}", err=True)
         raise typer.Exit(1)
 
 
@@ -93,17 +109,17 @@ def get_workflow_status(settings: Settings, workflow_name: Optional[str] = None)
 
     Args:
         settings: Application settings
-        workflow_name: Optional workflow name, will use settings if not provided
+        workflow_name: Name of the workflow to check (uses configured workflow if not specified)
 
     Returns:
-        Dictionary with workflow status information
+        dict: Workflow status information
     """
-    name = workflow_name or settings.entity_resolution.workflow_name
-    er_service = EntityResolutionService(settings)
+    workflow = workflow_name or settings.entity_resolution.workflow_name
+    if not workflow:
+        raise ValueError("Workflow name is required")
 
-    # Note: This is a placeholder. In a real implementation, you would call
-    # the actual AWS Entity Resolution API to get workflow status
-    return {"workflowName": name, "status": "ACTIVE", "lastUpdatedAt": "2023-01-01T12:00:00Z"}
+    service = EntityResolutionService(settings)
+    return service.get_workflow_status(workflow)
 
 
 @app.command()
@@ -112,30 +128,30 @@ def workflow_status(
         None, help="Name of the workflow to check (uses configured workflow if not specified)"
     ),
 ) -> None:
-    """Show the status of an Entity Resolution workflow."""
+    """Check the status of an Entity Resolution workflow."""
     try:
-        # Get settings from environment variables
         settings = get_settings()
 
-        # Validate we have a workflow name
-        name = workflow_name or settings.entity_resolution.workflow_name
-        if not name:
-            typer.echo("Error: workflow name is required", err=True)
+        if not settings.entity_resolution.workflow_name and not workflow_name:
+            typer.echo(
+                "Error: Workflow name is required. Specify with ER_WORKFLOW_NAME or --workflow-name",
+                err=True,
+            )
             raise typer.Exit(1)
 
-        # Get workflow status
-        status = get_workflow_status(settings, name)
+        status = get_workflow_status(settings, workflow_name)
 
-        # Display status information
-        typer.echo(f"Workflow: {status['workflowName']}")
-        typer.echo(f"Status: {status['status']}")
-        typer.echo(f"Last updated: {status['lastUpdatedAt']}")
+        typer.echo(f"Workflow: {workflow_name or settings.entity_resolution.workflow_name}")
+        typer.echo(f"Status: {status.get('workflowStatus', 'Unknown')}")
 
-    except boto3.exceptions.Boto3Error as e:
-        typer.echo(f"AWS error: {e!s}", err=True)
-        raise typer.Exit(1)
-    except RuntimeError as e:
-        typer.echo(f"Error: {e!s}", err=True)
+        if "statistics" in status:
+            stats = status["statistics"]
+            typer.echo("\nStatistics:")
+            for key, value in stats.items():
+                typer.echo(f"  {key}: {value}")
+
+    except Exception as e:
+        typer.echo(f"Error checking workflow status: {str(e)}", err=True)
         raise typer.Exit(1)
 
 

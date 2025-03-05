@@ -4,6 +4,7 @@ This repository contains a complete solution for entity resolution using AWS ser
 
 1. **CloudFormation Service Catalog Product**: Deployable through Service Catalog for provisioning AWS Entity Resolution infrastructure
 2. **Terraform Pipeline**: A Terraform-based data pipeline that extracts from Snowflake, processes with AWS Entity Resolution, and loads back to Snowflake
+3. **Python CLI Tool**: A command-line interface for interacting with the AWS Entity Resolution pipeline
 
 ## CloudFormation Service Catalog Product
 
@@ -37,6 +38,54 @@ The Terraform pipeline in `terraform/entity-resolution-pipeline/` includes:
 - Loads resolved data back to Snowflake
 - Scheduled execution via AWS Glue
 - Secure credential management
+
+## Python CLI Tool
+
+The Python CLI tool provides a convenient way to interact with the AWS Entity Resolution pipeline. It allows you to:
+
+- Extract data from Snowflake to S3
+- Process data through AWS Entity Resolution
+- Load matched records back to Snowflake
+- Run the complete pipeline in a single command
+
+### Key Features:
+
+- Unified CLI interface for all pipeline stages
+- Configuration through environment variables or config files
+- Dry-run mode for testing without executing
+- Detailed logging and error handling
+- Support for custom SQL queries and table overrides
+
+### Installation
+
+```bash
+# Install using pip
+pip install aws-entity-resolution
+
+# Or install from source
+git clone https://github.com/yourusername/aws-entity-resolution.git
+cd aws-entity-resolution
+pip install -e .
+```
+
+### Usage
+
+```bash
+# Run the complete pipeline
+entity-resolution run-pipeline
+
+# Extract data from Snowflake to S3
+entity-resolution extract run
+
+# Process data through AWS Entity Resolution
+entity-resolution process run
+
+# Load matched records to Snowflake
+entity-resolution load run
+
+# Show help
+entity-resolution --help
+```
 
 ## Getting Started
 

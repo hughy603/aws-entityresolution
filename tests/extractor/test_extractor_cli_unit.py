@@ -112,7 +112,7 @@ def test_extract_command_override_table(cli_runner: CliRunner, mock_settings: Ma
         result = cli_runner.invoke(app, ["--source-table", "custom_table"])
 
         assert result.exit_code == 0
-        assert "successfully" in result.stdout
+        assert "Successfully" in result.stdout
 
 
 def test_extract_command_snowflake_error(cli_runner: CliRunner, mock_settings: MagicMock) -> None:

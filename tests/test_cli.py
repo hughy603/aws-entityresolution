@@ -180,24 +180,44 @@ def test_process_run_success(mock_settings, mock_process_result):
     """Test successful process run."""
     with (
         patch("src.aws_entity_resolution.cli.get_settings", return_value=mock_settings),
-        patch("src.aws_entity_resolution.cli.process_data", return_value=mock_process_result),
+        patch(
+            "src.aws_entity_resolution.cli.process_data",
+            return_value=MagicMock(
+                success=True,
+                job_id="test-job-id",
+                output_path="s3://test-bucket/output-path",
+                error_message=None,
+            ),
+        ),
     ):
         result = process_run(dry_run=False)
-        assert result.status == "success"
+        assert result.success is True
         assert result.job_id == "test-job-id"
 
 
 def test_process_run_dry_run(mock_settings):
     """Test process dry run."""
-    with patch("src.aws_entity_resolution.cli.get_settings", return_value=mock_settings):
+    with (
+        patch("src.aws_entity_resolution.cli.get_settings", return_value=mock_settings),
+        patch(
+            "src.aws_entity_resolution.cli.process_data",
+            return_value=MagicMock(
+                success=True,
+                job_id="dry-run-job-id",
+                output_path="s3://test-bucket/dry-run-output/",
+                error_message=None,
+            ),
+        ),
+    ):
         result = process_run(dry_run=True)
-        assert result.status == "dry_run"
+        assert result.success is True
+        assert result.job_id == "dry-run-job-id"
 
 
 def test_process_run_invalid_settings(mock_settings):
     """Test process run with invalid settings."""
     with patch("src.aws_entity_resolution.cli.get_settings", return_value=mock_settings):
-        mock_settings.s3.bucket = ""
+        mock_settings.entity_resolution.workflow_name = ""
         with pytest.raises(typer.Exit):
             process_run(dry_run=False)
 
@@ -206,18 +226,28 @@ def test_load_run_success(mock_settings, mock_load_result):
     """Test successful load run."""
     with (
         patch("src.aws_entity_resolution.cli.get_settings", return_value=mock_settings),
-        patch("src.aws_entity_resolution.cli.load_records", return_value=mock_load_result),
+        patch(
+            "src.aws_entity_resolution.cli.load_records",
+            return_value=MagicMock(success=True, record_count=50, error_message=None),
+        ),
     ):
         result = load_run(dry_run=False)
-        assert result.status == "success"
-        assert result.records_loaded == 50
+        assert result.success is True
+        assert result.record_count == 50
 
 
 def test_load_run_dry_run(mock_settings):
     """Test load dry run."""
-    with patch("src.aws_entity_resolution.cli.get_settings", return_value=mock_settings):
+    with (
+        patch("src.aws_entity_resolution.cli.get_settings", return_value=mock_settings),
+        patch(
+            "src.aws_entity_resolution.cli.load_records",
+            return_value=MagicMock(success=True, record_count=0, error_message=None),
+        ),
+    ):
         result = load_run(dry_run=True)
-        assert result.status == "dry_run"
+        assert result.success is True
+        assert result.record_count == 0
 
 
 def test_load_run_invalid_settings(mock_settings):
@@ -234,54 +264,65 @@ def test_run_pipeline_success(
     """Test successful pipeline run."""
     with (
         patch("src.aws_entity_resolution.cli.get_settings", return_value=mock_settings),
-        patch("src.aws_entity_resolution.cli.extract_run", return_value=mock_extract_result),
-        patch("src.aws_entity_resolution.cli.process_run", return_value=mock_process_result),
-        patch("src.aws_entity_resolution.cli.load_run", return_value=mock_load_result),
+        patch(
+            "src.aws_entity_resolution.cli.extract_data",
+            return_value=MagicMock(
+                success=True,
+                record_count=100,
+                output_path="s3://test-bucket/test-path",
+                error_message=None,
+            ),
+        ),
+        patch(
+            "src.aws_entity_resolution.cli.process_data",
+            return_value=MagicMock(
+                success=True, output_path="s3://test-bucket/output-path", error_message=None
+            ),
+        ),
+        patch(
+            "src.aws_entity_resolution.cli.load_records",
+            return_value=MagicMock(success=True, record_count=50, error_message=None),
+        ),
     ):
-        # Configure the mock returns
-        mock_extract_result.status = "success"
-        mock_process_result.status = "success"
-        mock_load_result.status = "success"
-
         result = run_pipeline(dry_run=False)
-
-        # Verify the result contains the mocks
-        assert result["extract"] is mock_extract_result
-        assert result["process"] is mock_process_result
-        assert result["load"] is mock_load_result
+        assert result == 0  # Successful exit code
 
 
 def test_run_pipeline_dry_run(mock_settings):
     """Test pipeline dry run."""
     with (
         patch("src.aws_entity_resolution.cli.get_settings", return_value=mock_settings),
-        patch("src.aws_entity_resolution.cli.extract_run") as mock_extract,
-        patch("src.aws_entity_resolution.cli.process_run") as mock_process,
-        patch("src.aws_entity_resolution.cli.load_run") as mock_load,
+        patch("src.aws_entity_resolution.cli.extract_data") as mock_extract,
+        patch("src.aws_entity_resolution.cli.process_data") as mock_process,
+        patch("src.aws_entity_resolution.cli.load_records") as mock_load,
     ):
         # Configure the mock returns
-        extract_mock = MagicMock()
-        extract_mock.status = "dry_run"
-        process_mock = MagicMock()
-        process_mock.status = "dry_run"
-        load_mock = MagicMock()
-        load_mock.status = "dry_run"
-
-        mock_extract.return_value = extract_mock
-        mock_process.return_value = process_mock
-        mock_load.return_value = load_mock
+        mock_extract.return_value = MagicMock(
+            success=True,
+            record_count=0,
+            output_path="s3://test-bucket/test-prefix/dry-run.json",
+            error_message=None,
+        )
+        mock_process.return_value = MagicMock(
+            success=True,
+            output_path="s3://test-bucket/test-prefix/dry-run-output/",
+            error_message=None,
+        )
+        mock_load.return_value = MagicMock(success=True, record_count=0, error_message=None)
 
         result = run_pipeline(dry_run=True)
 
         # Verify the mocks were called with dry_run=True
-        mock_extract.assert_called_once_with(dry_run=True)
-        mock_process.assert_called_once_with(dry_run=True)
-        mock_load.assert_called_once_with(dry_run=True)
+        mock_extract.assert_called_once()
+        assert mock_extract.call_args[1]["dry_run"] is True
 
-        # Verify the result contains the mocks
-        assert result["extract"] is extract_mock
-        assert result["process"] is process_mock
-        assert result["load"] is load_mock
+        mock_process.assert_called_once()
+        assert mock_process.call_args[1]["dry_run"] is True
+
+        mock_load.assert_called_once()
+        assert mock_load.call_args[1]["dry_run"] is True
+
+        assert result == 0  # Successful exit code
 
 
 def test_cli_extract_command(runner, mock_settings, mock_extract_result):
@@ -298,7 +339,7 @@ def test_cli_extract_command(runner, mock_settings, mock_extract_result):
     ):
         result = runner.invoke(app, ["extract", "run"])
         assert result.exit_code == 0
-        assert "Records extracted: 100" in result.stdout
+        assert "Successfully extracted 100 records to s3://test-bucket/test-path" in result.stdout
 
 
 def test_cli_extract_command_dry_run(runner, mock_settings):
@@ -306,16 +347,19 @@ def test_cli_extract_command_dry_run(runner, mock_settings):
     with (
         patch("src.aws_entity_resolution.cli.get_settings", return_value=mock_settings),
         patch(
-            "src.aws_entity_resolution.cli.extract_data", return_value=MagicMock(status="dry_run")
+            "src.aws_entity_resolution.cli.extract_data",
+            return_value=MagicMock(
+                success=True,
+                record_count=0,
+                output_path="s3://test-bucket/test-prefix/dry-run.json",
+                status="dry_run",
+            ),
         ),
         patch("src.aws_entity_resolution.cli.extract_run") as mock_extract,
     ):
-        mock_extract.return_value = MagicMock(status="dry_run")
-
-        # Update to use the correct command structure
         result = runner.invoke(app, ["extract", "run", "--dry-run"])
         assert result.exit_code == 0
-        assert "DRY RUN" in result.stdout
+        assert "This was a dry run" in result.stdout
 
 
 def test_cli_process_command(runner, mock_settings, mock_process_result):
@@ -340,14 +384,14 @@ def test_cli_load_command(runner, mock_settings, mock_load_result):
         patch("src.aws_entity_resolution.cli.get_settings", return_value=mock_settings),
         patch(
             "src.aws_entity_resolution.cli.load_records",
-            return_value=MagicMock(success=True, records_loaded=50),
+            return_value=MagicMock(success=True, record_count=50),
         ),
         patch("src.aws_entity_resolution.cli.load_run", return_value=mock_load_result),
     ):
         # Update to use the correct command structure
         result = runner.invoke(app, ["load", "run"])
         assert result.exit_code == 0
-        assert "Loading completed successfully: 50 records loaded" in result.stdout
+        assert "Successfully loaded 50 records to test_target" in result.stdout
 
 
 def test_cli_run_command(
@@ -367,14 +411,19 @@ def test_cli_run_command(
         ),
         patch(
             "src.aws_entity_resolution.cli.process_data",
-            return_value=MagicMock(success=True, job_id="test-job-id", matched_records=75),
+            return_value=MagicMock(
+                success=True,
+                job_id="test-job-id",
+                matched_records=75,
+                output_path="s3://test-bucket/output-path",
+            ),
         ),
         patch(
             "src.aws_entity_resolution.cli.load_records",
-            return_value=MagicMock(success=True, records_loaded=50),
+            return_value=MagicMock(success=True, record_count=50),
         ),
     ):
         # Update to use the correct command name
         result = runner.invoke(app, ["run-pipeline"])
         assert result.exit_code == 0
-        assert "Pipeline completed successfully" in result.stdout
+        assert "Pipeline execution completed successfully" in result.stdout

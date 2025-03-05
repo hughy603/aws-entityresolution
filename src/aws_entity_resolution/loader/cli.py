@@ -1,174 +1,188 @@
-from typing import Optional
-
 """CLI interface for the loader module."""
 
 import sys
+from typing import Optional
 
 import boto3
 import snowflake.connector
 import typer
 
-from aws_entity_resolution.config import get_settings
+from aws_entity_resolution.config import Settings, get_settings
 from aws_entity_resolution.loader.loader import LoadingResult, create_target_table, load_records
 from aws_entity_resolution.services import SnowflakeService
 from aws_entity_resolution.utils import get_logger, log_event
 
 app = typer.Typer(help="Load matched records from S3 to Snowflake")
+logger = get_logger(__name__)
 
 # Version information
 __version__ = "0.1.0"
 
 
-def validate_settings() -> None:
-    """Validate required environment variables are set."""
-    try:
+def validate_settings(settings: Optional[Settings] = None) -> bool:
+    """Validate required settings are present.
+
+    Returns:
+        bool: True if settings are valid, False otherwise.
+    """
+    if settings is None:
         settings = get_settings()
-        required_vars: list[tuple[str, str]] = [
-            ("S3_BUCKET_NAME", settings.s3.bucket),
-            ("SNOWFLAKE_ACCOUNT", settings.snowflake_target.account),
-            ("SNOWFLAKE_USERNAME", settings.snowflake_target.username),
-            ("SNOWFLAKE_PASSWORD", settings.snowflake_target.password),
-            ("SNOWFLAKE_ROLE", settings.snowflake_target.role),
-            ("SNOWFLAKE_WAREHOUSE", settings.snowflake_target.warehouse),
-            ("SNOWFLAKE_TARGET_DATABASE", settings.snowflake_target.database),
-            ("SNOWFLAKE_TARGET_SCHEMA", settings.snowflake_target.schema),
-            ("TARGET_TABLE", settings.target_table),
-        ]
 
-        missing_vars = [var_name for var_name, var_value in required_vars if not var_value]
+    missing = []
 
-        if missing_vars:
-            typer.echo(
-                f"Missing required environment variables: {', '.join(missing_vars)}",
-                err=True,
-            )
-            raise typer.Exit(1)
-    except (ValueError, TypeError) as e:
-        typer.echo(f"Error loading settings: {e!s}", err=True)
-        raise typer.Exit(1)
+    if not settings.s3.bucket:
+        missing.append("S3_BUCKET_NAME")
+
+    if not settings.snowflake_target.account:
+        missing.append("SNOWFLAKE_ACCOUNT")
+
+    if not settings.snowflake_target.username:
+        missing.append("SNOWFLAKE_USERNAME")
+
+    if not settings.snowflake_target.password:
+        missing.append("SNOWFLAKE_PASSWORD")
+
+    if not settings.snowflake_target.warehouse:
+        missing.append("SNOWFLAKE_WAREHOUSE")
+
+    if not settings.snowflake_target.database:
+        missing.append("SNOWFLAKE_TARGET_DATABASE")
+
+    if not settings.snowflake_target.schema:
+        missing.append("SNOWFLAKE_TARGET_SCHEMA")
+
+    if not settings.target_table:
+        missing.append("TARGET_TABLE")
+
+    if missing:
+        typer.echo(f"Error: Missing required environment variables: {', '.join(missing)}", err=True)
+        return False
+    return True
 
 
-@app.command()
+@app.command("run")
 def load(
-    s3_key: Optional[str] = typer.Argument(None, help="S3 key containing matched records"),
+    s3_key: Optional[str] = typer.Option(
+        None, "--s3-key", "-k", help="S3 key containing matched records"
+    ),
     input_uri: Optional[str] = typer.Option(
-        None, "--input-uri", help="URI of input data (s3://bucket/key)"
+        None, "--input-uri", "-i", help="URI of input data (s3://bucket/key)"
     ),
     dry_run: bool = typer.Option(
-        False, "--dry-run", help="Show what would be loaded without actually loading"
+        False, "--dry-run", "-d", help="Show what would be loaded without actually loading"
     ),
     target_table: Optional[str] = typer.Option(
-        None, "--target-table", help="Override target table name"
+        None, "--target-table", "-t", help="Override target table name"
     ),
     truncate_target: bool = typer.Option(
-        False, "--truncate-target", help="Truncate target table before loading"
+        False, "--truncate", help="Truncate target table before loading"
     ),
 ) -> None:
     """Load matched records from S3 to Snowflake."""
     try:
-        # Validate settings
-        validate_settings()
         settings = get_settings()
 
-        # Process input_uri if provided
+        if not validate_settings(settings):
+            raise typer.Exit(1)
+
+        # Override target table if provided
+        if target_table:
+            settings.target_table = target_table
+
+        # Log the loading parameters
+        log_event(
+            logger,
+            "Starting data loading",
+            {
+                "s3_bucket": settings.s3.bucket,
+                "s3_key": s3_key or input_uri,
+                "target_table": settings.target_table,
+                "dry_run": dry_run,
+                "truncate": truncate_target,
+            },
+        )
+
+        # Determine the S3 key to use
         if input_uri and not s3_key:
+            # Extract bucket and key from input_uri (s3://bucket/key)
             if input_uri.startswith("s3://"):
-                # Extract the key part from s3://bucket/key
-                parts = input_uri.replace("s3://", "").split("/", 1)
-                if len(parts) > 1:
+                parts = input_uri[5:].split("/", 1)
+                if len(parts) == 2:
                     s3_key = parts[1]
 
-        # Ensure we have a key
-        if not s3_key:
-            typer.echo("Error: S3 key is required", err=True)
-            raise typer.Exit(1)
+        # Load the data
+        result = load_records(
+            settings,
+            s3_key=s3_key,
+            dry_run=dry_run,
+            truncate=truncate_target,
+        )
 
-        if dry_run:
-            typer.echo("Dry run mode - showing configuration:")
-            typer.echo(f"  S3 Bucket: {settings.s3.bucket}")
-            typer.echo(f"  S3 Key: {s3_key}")
-            typer.echo(f"  Target Database: {settings.snowflake_target.database}")
-            typer.echo(f"  Target Schema: {settings.snowflake_target.schema}")
-            typer.echo(f"  Target Table: {settings.target_table}")
-            return
-
-        # Load records
-        typer.echo("Loading matched records to Snowflake...")
-        result = load_data(settings, s3_key)
-
-        if result.status == "success":
+        if result.success:
             typer.echo(
-                f"Successfully loaded {result.records_loaded} records to {result.target_table}"
+                f"Successfully loaded {result.record_count} records to {settings.target_table}"
             )
-            typer.echo(f"Target table: {result.target_table}")
-            if hasattr(result, "execution_time") and result.execution_time is not None:
-                typer.echo(f"execution time: {result.execution_time}s")
-            if result.error_message:
-                typer.echo(f"Note: {result.error_message}")
+            if dry_run:
+                typer.echo("This was a dry run. No data was actually loaded.")
         else:
-            typer.echo(f"Failed to load records: {result.error_message}", err=True)
+            typer.echo(f"Error loading data: {result.error_message}", err=True)
             raise typer.Exit(1)
-    except (
-        snowflake.connector.errors.ProgrammingError,
-        snowflake.connector.errors.DatabaseError,
-    ) as e:
-        typer.echo(f"Database error: {e!s}", err=True)
-        raise typer.Exit(1)
-    except boto3.exceptions.Boto3Error as e:
-        typer.echo(f"AWS error: {e!s}", err=True)
-        raise typer.Exit(1)
-    except RuntimeError as e:
-        typer.echo(f"Error loading data: {e!s}", err=True)
-        raise typer.Exit(1)
+
     except Exception as e:
-        typer.echo(f"Error loading data: {e!s}", err=True)
+        typer.echo(f"Error: {str(e)}", err=True)
         raise typer.Exit(1)
-
-
-def load_data(settings, s3_key: Optional[str] = None) -> LoadingResult:
-    """Load data from S3 to Snowflake.
-
-    This function is a wrapper around load_records for testing purposes.
-
-    Args:
-        settings: Application settings
-        s3_key: Optional S3 key containing matched records
-
-    Returns:
-        LoadingResult with status and metadata
-    """
-    return load_records(settings, s3_key)
 
 
 @app.command()
-def create_table() -> None:
-    """Create the target table in Snowflake if it doesn't exist."""
+def create_table(
+    target_table: Optional[str] = typer.Option(
+        None, "--target-table", "-t", help="Override target table name"
+    ),
+    if_not_exists: bool = typer.Option(
+        True, "--if-not-exists/--replace", help="Create table only if it doesn't exist"
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", "-d", help="Show SQL without executing"),
+) -> None:
+    """Create the target table in Snowflake."""
     try:
-        # Validate settings
-        validate_settings()
         settings = get_settings()
 
-        # Create Snowflake service
-        snowflake_service = SnowflakeService(settings, use_target=True)
+        if not validate_settings(settings):
+            raise typer.Exit(1)
 
-        # Create table
-        typer.echo(f"Creating table {settings.target_table} if not exists...")
-        create_target_table(snowflake_service, settings)
-        typer.echo("Successfully created target table")
-    except (
-        snowflake.connector.errors.ProgrammingError,
-        snowflake.connector.errors.DatabaseError,
-    ) as e:
-        typer.echo(f"Database error: {e!s}", err=True)
-        typer.echo("Error creating target table", err=True)
-        raise typer.Exit(1)
-    except RuntimeError as e:
-        typer.echo(f"Error creating target table: {e!s}", err=True)
-        typer.echo("Error creating target table", err=True)
-        raise typer.Exit(1)
+        # Override target table if provided
+        if target_table:
+            settings.target_table = target_table
+
+        # Log the table creation parameters
+        log_event(
+            logger,
+            "Creating target table",
+            {
+                "target_table": settings.target_table,
+                "if_not_exists": if_not_exists,
+                "dry_run": dry_run,
+            },
+        )
+
+        # Create the table
+        result = create_target_table(
+            settings,
+            if_not_exists=if_not_exists,
+            dry_run=dry_run,
+        )
+
+        if result.success:
+            typer.echo(f"Successfully created table {settings.target_table}")
+            if dry_run:
+                typer.echo("This was a dry run. SQL was not executed.")
+                typer.echo(f"SQL: {result.sql}")
+        else:
+            typer.echo(f"Error creating table: {result.error_message}", err=True)
+            raise typer.Exit(1)
+
     except Exception as e:
-        typer.echo(f"Unexpected error: {e!s}", err=True)
-        typer.echo("Error creating target table", err=True)
+        typer.echo(f"Error: {str(e)}", err=True)
         raise typer.Exit(1)
 
 

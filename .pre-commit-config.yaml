@@ -87,9 +87,18 @@ repos:
 
 - repo: local
   hooks:
+    - id: fix-type-annotations
+      name: Fix type annotations
+      entry: poetry run python scripts/fix_all_annotations.py
+      language: system
+      pass_filenames: false
+      always_run: true
+      stages: [commit, push]
+      description: "Fix type annotations to use Optional[T] instead of T | None syntax"
+
     - id: fix-typer-annotations
       name: Fix Typer annotations
-      entry: python3 scripts/fix_typer_annotations.py
+      entry: poetry run python scripts/fix_typer_annotations.py
       language: system
       pass_filenames: false
       always_run: true
@@ -115,7 +124,7 @@ repos:
     # Add our custom fix scripts as optional hooks
     - id: fix-all
       name: Fix all linting issues
-      entry: python3 scripts/fix_all.py
+      entry: poetry run python scripts/fix_all.py
       language: system
       pass_filenames: false
       always_run: true
@@ -124,7 +133,7 @@ repos:
 
     - id: fix-mypy
       name: Fix mypy issues
-      entry: python3 scripts/fix_mypy_issues.py
+      entry: poetry run python scripts/fix_mypy_issues.py
       language: system
       pass_filenames: false
       always_run: true
@@ -133,7 +142,7 @@ repos:
 
     - id: fix-ruff
       name: Fix Ruff issues
-      entry: python3 scripts/fix_ruff.py
+      entry: poetry run python scripts/fix_ruff.py
       language: system
       pass_filenames: false
       always_run: true

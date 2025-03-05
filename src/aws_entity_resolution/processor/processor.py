@@ -129,6 +129,10 @@ def process_data(
     s3_service: Optional[S3Service] = None,
     er_service: Optional[EntityResolutionService] = None,
     dry_run: bool = False,
+    wait: bool = True,
+    input_uri: Optional[str] = None,
+    output_file: Optional[str] = None,
+    matching_threshold: Optional[float] = None,
 ) -> ProcessingResult:
     """Process entity data through AWS Entity Resolution.
 
@@ -137,6 +141,10 @@ def process_data(
         s3_service: Optional S3Service for dependency injection
         er_service: Optional EntityResolutionService for dependency injection
         dry_run: If True, only simulate processing without making actual changes
+        wait: If True, wait for processing to complete
+        input_uri: Optional URI of input data (s3://bucket/key)
+        output_file: Optional custom output filename
+        matching_threshold: Optional matching confidence threshold
 
     Returns:
         ProcessingResult with processing status and stats
@@ -159,16 +167,30 @@ def process_data(
         )
 
     try:
-        # Find latest input file
-        input_file = find_latest_input_path(s3_service)
+        # Find latest input file or use provided input URI
+        input_file = input_uri if input_uri else find_latest_input_path(s3_service)
         if not input_file:
             raise ValueError("No input data found")
 
-        # Generate timestamp-based output path
-        output_prefix = f"{settings.s3.prefix}output/{time.strftime('%Y%m%d_%H%M%S')}/"
+        # Generate timestamp-based output path or use provided output file
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        output_prefix = f"{settings.s3.prefix}output/{output_file or timestamp}/"
 
         # Start matching job
         job_id = start_matching_job(er_service, input_file, output_prefix)
+
+        if not wait:
+            # If not waiting, return a result with the job ID but no statistics
+            return ProcessingResult(
+                status="submitted",
+                job_id=job_id,
+                input_records=0,
+                matched_records=0,
+                s3_bucket=settings.s3.bucket,
+                s3_key=output_prefix,
+                success=True,
+                output_path=f"s3://{settings.s3.bucket}/{output_prefix}",
+            )
 
         # Wait for job completion
         result = wait_for_matching_job(er_service, job_id)

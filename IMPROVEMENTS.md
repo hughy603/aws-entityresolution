@@ -88,3 +88,43 @@ This document outlines the key improvements made to the AWS Entity Resolution Se
 7. **Better Security**: Tightened permissions and security controls
 
 These improvements make the solution more maintainable, secure, and adaptable to different use cases while maintaining the same core functionality.
+
+## Recent CLI and Codebase Improvements (March 2024)
+
+### 1. CLI Interface Enhancements
+
+- **Unified Command Structure**: Standardized command structure across all CLI modules
+- **Consistent Error Handling**: Improved error handling with clear error messages
+- **Dry Run Support**: Enhanced dry run mode with detailed output
+- **Parameter Validation**: Better validation of command-line parameters
+- **Help Text**: Improved help text and documentation
+
+### 2. Type Annotation Fixes
+
+- **Python 3.12 Compatibility**: Fixed type annotations to work with Python 3.12
+- **Typer Compatibility**: Updated union type syntax (`str | None` → `Optional[str]`) for Typer compatibility
+- **Automated Fixes**: Added script to automatically fix type annotations across the codebase
+- **Import Management**: Ensured proper imports for type annotations
+
+### 3. Configuration Management
+
+- **Simplified Settings**: Streamlined settings management with better defaults
+- **Environment Variables**: Improved handling of environment variables
+- **Validation Logic**: Enhanced validation of required settings
+- **Override Support**: Better support for overriding settings at runtime
+
+### 4. Code Organization
+
+- **Reduced Duplication**: Eliminated duplicate code across CLI modules
+- **Consistent Patterns**: Standardized patterns for command implementation
+- **Modular Design**: Improved modularity for better maintainability
+- **Clear Responsibilities**: Better separation of concerns between modules
+
+### 5. Documentation
+
+- **Updated README**: Enhanced documentation with CLI usage examples
+- **Improved Docstrings**: Added comprehensive docstrings to all functions
+- **Type Hints**: Better type hints for improved IDE support
+- **Usage Examples**: Added examples for common use cases
+
+These recent improvements make the codebase more maintainable, easier to use, and compatible with the latest Python versions while maintaining backward compatibility.
