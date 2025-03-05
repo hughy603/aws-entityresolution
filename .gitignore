@@ -1,0 +1,104 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+pytest-report.xml
+
+# Poetry and environments
+.venv
+venv/
+ENV/
+.env
+.python-version
+poetry.lock
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# ruff
+.ruff_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraformrc
+terraform.rc
+.terraform.lock.hcl
+*.tfplan
+
+# AWS
+.aws/
+aws-credentials.csv
+credentials.csv
+*.pem
+
+# Snowflake
+snowflake_credentials.json
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Secrets and local config
+*.env
+.env.*
+config.local.yaml
+.envrc
+
+# Ignore all .secrets files EXCEPT the baseline
+.secrets*
+!.secrets.baseline
+
+# Ignore temporary files and backup files
+*.tmp
+*.bak
+*.backup
+*#
+.#*

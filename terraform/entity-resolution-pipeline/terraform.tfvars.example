@@ -1,0 +1,62 @@
+# AWS Configuration
+aws_region = "us-east-1"
+
+# Resource Tags
+default_tags = {
+  Environment = "dev"
+  Project     = "entity-resolution"
+  ManagedBy   = "terraform"
+}
+
+resource_tags = {
+  Owner       = "data-engineering-team"
+  Application = "customer-golden-record"
+}
+
+# S3 Configuration
+s3_bucket_name  = "entity-resolution-data-example"
+s3_input_prefix = "input/"
+s3_output_prefix = "output/"
+
+# Snowflake Configuration
+snowflake_account  = "your-snowflake-account"
+snowflake_username = "your-snowflake-username"
+snowflake_password = "your-snowflake-password"  # Use environment variables or AWS Secrets Manager instead
+snowflake_role     = "ACCOUNTADMIN"
+snowflake_warehouse = "COMPUTE_WH"
+
+snowflake_source_database = "SOURCE_DB"
+snowflake_source_schema   = "PUBLIC"
+snowflake_target_database = "TARGET_DB"
+snowflake_target_schema   = "PUBLIC"
+
+source_table = "CUSTOMER_DATA"
+target_table = "GOLDEN_ENTITY_RECORDS"
+
+# Entity Resolution Configuration
+entity_resolution_role_name = "entity-resolution-service-role"
+matching_workflow_name = "customer-entity-matching-workflow"
+schema_name = "customer-entity-schema"
+
+entity_attributes = [
+  "id",
+  "first_name",
+  "last_name",
+  "email",
+  "phone",
+  "address",
+  "company"
+]
+
+# Glue Configuration
+glue_iam_role_name = "entity-resolution-glue-role"
+extraction_glue_job_name = "snowflake-to-s3-customer-extraction"
+entity_resolution_glue_job_name = "customer-entity-resolution-processor"
+loader_glue_job_name = "s3-to-snowflake-customer-loader"
+
+extraction_schedule = "cron(0 0 * * ? *)"  # Daily at midnight
+loading_schedule = "cron(0 1 * * ? *)"     # Daily at 1am
+
+# Notification settings
+notification_email = "admin@example.com"
+entity_resolution_dashboard_url = "https://splunk.example.com/app/entity-resolution-dashboard"

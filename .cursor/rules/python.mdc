@@ -1,0 +1,93 @@
+---
+description: Python Data Platforms
+globs: **/*.py, pyproject.toml
+alwaysApply: false
+---
+
+You are an expert in data engineering and Python, visualization, and Jupyter Notebook development, with a focus on Python libraries such as pandas, matplotlib, seaborn, and numpy.
+
+# Key Principles
+
+- Write concise, technical responses with accurate Python examples.
+- Use functional, declarative programming; avoid classes where possible.
+- Prefer iteration and modularization over code duplication.
+- Use descriptive variable names with auxiliary verbs (e.g., is_active, has_permission).
+- Use lowercase with underscores for directories and files (e.g., routers/user_routes.py).
+- Favor named exports for routes and utility functions.
+- All programs need a CLI entry point
+- Write concise, well-structured Terraform code with accurate examples.
+- Organize infrastructure resources into reusable modules.
+- Use versioned infrastructure modules and provider version locks to ensure consistent deployments.
+- Avoid hardcoded Terraform values; always use variables for flexibility.
+- Use Splunk for CloudWatch log observability and assume all logs are automatically ingested into Splunk.
+- use pre-commit to automate linting & testing accoriding to best practices for Python, Terraform, CloudFormation, and any other used languages
+- Avoid tight coupling to source or target Schemas so the example can be easily reused for additional data domains.
+- Use Dynatrace for Observing AWS CloudWatch metrics
+
+# Code Style
+
+- Follow PEP8 Style Guidelines unless exception is requested in other instructions (Ex. increased line length)
+- Use type hints for all function signatures. Prefer Pydantic models over raw dictionaries for input validation.
+- Use concise, one-line syntax for simple conditional statements (e.g., if condition: do_something()).
+- Try to pass linting validation but add non-serious errors to ignore lists
+- Use additional Python libraries when it would simplify the codebase
+- Follow python's industry best practices
+- Write Python code as a Poetry package with unit tests that will be built, tested, & published during CI and downloaded during the build phase of CD.
+- Use environment variables to pass inputs to Python programs when not possible to do so over CLI
+- Write `pytest` Python unit & integration tests
+- Use `ruff` over `isort` & `black`
+- Use coverage to validate unit tests have 80% code coverage
+- Target Python 3.13 style
+- Write logs structured in JSON to be parsed in Splunk as dashboards
+- Use mypy to validate static typing, but add non-critical issues to .mypy.ini
+- Set maximum line length to 100
+- Always use a src directory and know src will never be the root package.
+
+# Error Handling and Validation
+
+- Prioritize error handling and edge cases.
+- Handle errors and edge cases at the beginning of functions.
+- Use early returns for error conditions to avoid deeply nested if statements.
+- Place the happy path last in the function for improved readability.
+- Avoid unnecessary else statements; use the if-return pattern instead.
+- Implement proper structured error logging for Splunk.
+
+# Performance Optimization
+
+- Use vectorized operations in pandas and numpy for improved performance.
+- Utilize efficient data structures (e.g., categorical data types for low-cardinality string columns).
+- Consider using dask for larger-than-memory datasets.
+- Profile code to identify and optimize bottlenecks.
+
+# Preferred Python Dependencies
+
+- Poetry
+- Typer
+- pre-commit
+- pytest
+- ruff
+- coverage
+- mypy
+- boto3
+
+# Splunk
+
+- Create alerts for critical infrastructure & application events
+- Create dashboard to visualize application health & usage
+
+# Testing
+
+## Unit Testing
+
+- Write thorough unit tests to validate individual functions and components.
+- Use pytest Testing Library for reliable and efficient testing.
+- Mock external dependencies and API calls to isolate unit tests.
+- Use moto to mock AWS API calls
+- Target 80% code coverage
+
+## Integration Testing
+
+- Focus on user workflows to ensure app functionality.
+- Set up and tear down test environments properly to maintain test independence.
+- Use snapshot testing selectively to catch unintended UI changes without over-relying on it.
+- Leverage testing utilities (e.g., screen in RTL) for cleaner and more readable tests.

@@ -1,0 +1,76 @@
+# Example configuration for AWS Entity Resolution Pipeline
+# This file can be used to configure the pipeline without environment variables
+
+# General settings
+aws_region: us-east-1
+environment: dev
+log_level: INFO
+
+# S3 configuration
+s3:
+  bucket: entity-resolution-data
+  input_prefix: input/
+  output_prefix: output/
+
+# Entity Resolution configuration
+entity_resolution:
+  workflow_name: entity-matching-workflow
+  schema_name: entity-schema
+  attributes:
+    - name: id
+      type: PERSON_IDENTIFIER
+      subtype: NONE
+      match_key: true
+    - name: name
+      type: NAME
+      subtype: NONE
+      match_key: true
+    - name: email
+      type: EMAIL
+      subtype: NONE
+      match_key: true
+    - name: phone
+      type: PHONE_NUMBER
+      subtype: NONE
+      match_key: true
+    - name: address
+      type: ADDRESS
+      subtype: NONE
+      match_key: true
+    - name: company
+      type: TEXT
+      subtype: NONE
+      match_key: false
+
+# Snowflake source configuration
+snowflake_source:
+  account: your-snowflake-account
+  username: your-username
+  password: your-password  # Consider using environment variables or secrets manager for passwords
+  role: ACCOUNTADMIN
+  warehouse: COMPUTE_WH
+  database: SOURCE_DB
+  schema: PUBLIC
+  table: ENTITY_DATA
+
+# Snowflake target configuration
+snowflake_target:
+  account: your-snowflake-account
+  username: your-username
+  password: your-password  # Consider using environment variables or secrets manager for passwords
+  role: ACCOUNTADMIN
+  warehouse: COMPUTE_WH
+  database: TARGET_DB
+  schema: PUBLIC
+  table: GOLDEN_RECORDS
+
+# Override table names if needed
+source_table: ENTITY_DATA
+target_table: GOLDEN_RECORDS
+
+# Pipeline configuration
+pipeline:
+  schedule: cron(0 0 * * ? *)  # Daily at midnight UTC
+  timeout: 3600  # 1 hour
+  concurrency: 1
+  retry_attempts: 3

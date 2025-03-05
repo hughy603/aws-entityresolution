@@ -1,0 +1,79 @@
+/* -----------------------------------------------------
+ * ENTITY RESOLUTION PIPELINE AUTOSYS JOB DEFINITION
+ * -----------------------------------------------------
+ * This JIL script defines an Autosys workflow that executes
+ * the AWS Entity Resolution pipeline in three distinct phases:
+ * 1. Extract - Extract data from source systems
+ * 2. Process - Run entity resolution via AWS Step Functions
+ * 3. Load - Load results to Snowflake
+ * ----------------------------------------------------- */
+
+/* -----------------------------------------------------
+ * ENTITY RESOLUTION PARENT BOX JOB
+ * ----------------------------------------------------- */
+
+insert_job: DATA_PROCESSING_JOBS job_type: BOX
+description: "Data processing workflow containing entity resolution"
+owner: autosys
+alarm_if_fail: 1
+permission: gx,ge,wx,we
+date_conditions: 1
+days_of_week: all
+start_times: "02:00"
+timezone: US/Eastern
+
+/* -----------------------------------------------------
+ * EXTRACT PHASE - DAILY SCHEDULED
+ * ----------------------------------------------------- */
+
+insert_job: ER_EXTRACT_DAILY job_type: c
+description: "Extract data for entity resolution pipeline"
+owner: autosys
+alarm_if_fail: 1
+max_run_alarm: 60
+term_run_time: 3600
+box_name: DATA_PROCESSING_JOBS
+permission: gx,ge,wx,we
+std_out_file: "/var/log/autosys/entity-resolution/ER_EXTRACT_DAILY.out"
+std_err_file: "/var/log/autosys/entity-resolution/ER_EXTRACT_DAILY.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/er_extract.sh
+envvars: AWS_REGION=us-east-1,PROJECT_NAME=entity-resolution
+
+/* -----------------------------------------------------
+ * PROCESS PHASE - ENTITY RESOLUTION
+ * ----------------------------------------------------- */
+
+insert_job: ER_PROCESS_DAILY job_type: c
+description: "Run entity resolution via AWS Step Functions"
+owner: autosys
+alarm_if_fail: 1
+max_run_alarm: 180
+term_run_time: 10800
+box_name: DATA_PROCESSING_JOBS
+permission: gx,ge,wx,we
+std_out_file: "/var/log/autosys/entity-resolution/ER_PROCESS_DAILY.out"
+std_err_file: "/var/log/autosys/entity-resolution/ER_PROCESS_DAILY.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/er_process.sh
+envvars: AWS_REGION=us-east-1,PROJECT_NAME=entity-resolution
+condition: s(ER_EXTRACT_DAILY)
+
+/* -----------------------------------------------------
+ * LOAD PHASE - SNOWFLAKE LOADING
+ * ----------------------------------------------------- */
+
+insert_job: ER_LOAD_DAILY job_type: c
+description: "Load entity resolution results to Snowflake"
+owner: autosys
+alarm_if_fail: 1
+max_run_alarm: 60
+term_run_time: 3600
+box_name: DATA_PROCESSING_JOBS
+permission: gx,ge,wx,we
+std_out_file: "/var/log/autosys/entity-resolution/ER_LOAD_DAILY.out"
+std_err_file: "/var/log/autosys/entity-resolution/ER_LOAD_DAILY.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/er_load.sh
+envvars: AWS_REGION=us-east-1,PROJECT_NAME=entity-resolution
+condition: s(ER_PROCESS_DAILY)

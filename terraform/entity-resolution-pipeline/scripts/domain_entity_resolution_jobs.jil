@@ -1,0 +1,98 @@
+/* -----------------------------------------------------
+ * DOMAIN-SPECIFIC ENTITY RESOLUTION JOBS
+ * -----------------------------------------------------
+ * This JIL script defines Autosys jobs for multiple
+ * entity domains (customers, products, vendors)
+ * ----------------------------------------------------- */
+
+/* -----------------------------------------------------
+ * BOX JOB: ENTITY RESOLUTION MASTER
+ * ----------------------------------------------------- */
+
+insert_job: ER_MASTER_BOX job_type: BOX
+description: "Entity Resolution Master Box Job"
+owner: autosys
+alarm_if_fail: 1
+permission: gx,ge,wx,we
+
+/* -----------------------------------------------------
+ * CUSTOMER ENTITY RESOLUTION (DAILY)
+ * ----------------------------------------------------- */
+
+insert_job: ER_CUSTOMER_DAILY job_type: c
+description: "Daily customer entity resolution processing"
+owner: autosys
+alarm_if_fail: 1
+box_name: ER_MASTER_BOX
+permission: gx,ge,wx,we
+date_conditions: 1
+days_of_week: all
+start_times: "03:00"
+timezone: US/Eastern
+max_run_alarm: 240
+term_run_time: 14400
+std_out_file: "/var/log/autosys/entity-resolution/customers/ER_CUSTOMER_DAILY.out"
+std_err_file: "/var/log/autosys/entity-resolution/customers/ER_CUSTOMER_DAILY.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/run_entity_resolution_domain.sh --domain customers
+
+/* -----------------------------------------------------
+ * PRODUCT ENTITY RESOLUTION (WEEKLY)
+ * ----------------------------------------------------- */
+
+insert_job: ER_PRODUCT_WEEKLY job_type: c
+description: "Weekly product entity resolution processing"
+owner: autosys
+alarm_if_fail: 1
+box_name: ER_MASTER_BOX
+permission: gx,ge,wx,we
+date_conditions: 1
+days_of_week: su
+start_times: "05:00"
+timezone: US/Eastern
+max_run_alarm: 360
+term_run_time: 21600
+std_out_file: "/var/log/autosys/entity-resolution/products/ER_PRODUCT_WEEKLY.out"
+std_err_file: "/var/log/autosys/entity-resolution/products/ER_PRODUCT_WEEKLY.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/run_entity_resolution_domain.sh --domain products
+
+/* -----------------------------------------------------
+ * VENDOR ENTITY RESOLUTION (MONTHLY)
+ * ----------------------------------------------------- */
+
+insert_job: ER_VENDOR_MONTHLY job_type: c
+description: "Monthly vendor entity resolution processing"
+owner: autosys
+alarm_if_fail: 1
+box_name: ER_MASTER_BOX
+permission: gx,ge,wx,we
+date_conditions: 1
+days_of_week: mo
+start_day_of_month: 1,2,3,4,5,6,7
+start_times: "01:30"
+timezone: US/Eastern
+max_run_alarm: 300
+term_run_time: 18000
+std_out_file: "/var/log/autosys/entity-resolution/vendors/ER_VENDOR_MONTHLY.out"
+std_err_file: "/var/log/autosys/entity-resolution/vendors/ER_VENDOR_MONTHLY.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/run_entity_resolution_domain.sh --domain vendors
+
+/* -----------------------------------------------------
+ * ON-DEMAND ENTITY RESOLUTION JOB
+ * ----------------------------------------------------- */
+
+insert_job: ER_ON_DEMAND job_type: c
+description: "On-demand entity resolution for any domain"
+owner: autosys
+alarm_if_fail: 1
+box_name: ER_MASTER_BOX
+permission: gx,ge,wx,we
+max_run_alarm: 240
+term_run_time: 14400
+std_out_file: "/var/log/autosys/entity-resolution/ER_ON_DEMAND.out"
+std_err_file: "/var/log/autosys/entity-resolution/ER_ON_DEMAND.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/run_entity_resolution_domain.sh
+envvars: DOMAIN="customers",PROCESS_DATE="$(date +\"%Y-%m-%d\")"

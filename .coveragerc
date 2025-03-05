@@ -1,0 +1,20 @@
+[run]
+source = aws_entity_resolution
+omit =
+    */tests/*
+    */venv/*
+    */__init__.py
+    */setup.py
+    */conftest.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    pass
+    raise ImportError
+    except ImportError
+fail_under = 80
+show_missing = True

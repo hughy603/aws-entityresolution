@@ -1,0 +1,277 @@
+/* -----------------------------------------------------
+ * SEQUENTIAL ENTITY RESOLUTION JOBS
+ * -----------------------------------------------------
+ * This JIL script defines Autosys jobs for domain-specific
+ * entity resolution, split into three sequential steps:
+ * 1. Extract from source
+ * 2. Process through AWS Entity Resolution
+ * 3. Load results to destination
+ * ----------------------------------------------------- */
+
+/* -----------------------------------------------------
+ * EMAIL NOTIFICATION SETTINGS
+ * ----------------------------------------------------- */
+
+/* Define notification settings as variables for reuse */
+/* Replace these addresses with your actual team email addresses */
+define_variable: ER_ADMIN_EMAIL="er-admin@example.com"
+define_variable: ER_TEAM_EMAIL="er-team@example.com"
+define_variable: ER_CUSTOMER_DOMAIN_EMAIL="customer-team@example.com"
+define_variable: ER_PRODUCT_DOMAIN_EMAIL="product-team@example.com"
+define_variable: ER_VENDOR_DOMAIN_EMAIL="vendor-team@example.com"
+
+/* -----------------------------------------------------
+ * MASTER BOX JOB FOR EACH DOMAIN
+ * ----------------------------------------------------- */
+
+/* CUSTOMER DOMAIN BOX */
+insert_job: ER_CUSTOMER_BOX job_type: BOX
+description: "Customer Entity Resolution Master Box Job"
+owner: autosys
+alarm_if_fail: 1
+permission: gx,ge,wx,we
+notification: fail("${ER_ADMIN_EMAIL},${ER_CUSTOMER_DOMAIN_EMAIL}")
+date_conditions: 1
+days_of_week: all
+start_times: "03:00"
+timezone: US/Eastern
+
+/* PRODUCT DOMAIN BOX */
+insert_job: ER_PRODUCT_BOX job_type: BOX
+description: "Product Entity Resolution Master Box Job"
+owner: autosys
+alarm_if_fail: 1
+permission: gx,ge,wx,we
+notification: fail("${ER_ADMIN_EMAIL},${ER_PRODUCT_DOMAIN_EMAIL}")
+date_conditions: 1
+days_of_week: su
+start_times: "05:00"
+timezone: US/Eastern
+
+/* VENDOR DOMAIN BOX */
+insert_job: ER_VENDOR_BOX job_type: BOX
+description: "Vendor Entity Resolution Master Box Job"
+owner: autosys
+alarm_if_fail: 1
+permission: gx,ge,wx,we
+notification: fail("${ER_ADMIN_EMAIL},${ER_VENDOR_DOMAIN_EMAIL}")
+date_conditions: 1
+days_of_week: mo
+start_day_of_month: 1,2,3,4,5,6,7
+start_times: "01:30"
+timezone: US/Eastern
+
+/* -----------------------------------------------------
+ * CUSTOMER DOMAIN SEQUENTIAL JOBS
+ * ----------------------------------------------------- */
+
+/* STEP 1: EXTRACT DATA FROM SNOWFLAKE TO S3 */
+insert_job: ER_CUSTOMER_EXTRACT job_type: c
+description: "Extract customer data from Snowflake to S3"
+owner: autosys
+alarm_if_fail: 1
+box_name: ER_CUSTOMER_BOX
+permission: gx,ge,wx,we
+notification: fail("${ER_ADMIN_EMAIL},${ER_CUSTOMER_DOMAIN_EMAIL}")
+max_run_alarm: 60
+term_run_time: 3600
+std_out_file: "/var/log/autosys/entity-resolution/customers/ER_CUSTOMER_EXTRACT.out"
+std_err_file: "/var/log/autosys/entity-resolution/customers/ER_CUSTOMER_EXTRACT.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/run_entity_resolution_stage.sh --domain customers --stage extract
+
+/* STEP 2: PROCESS DATA THROUGH AWS ENTITY RESOLUTION */
+insert_job: ER_CUSTOMER_PROCESS job_type: c
+description: "Process customer data through AWS Entity Resolution"
+owner: autosys
+alarm_if_fail: 1
+box_name: ER_CUSTOMER_BOX
+permission: gx,ge,wx,we
+notification: fail("${ER_ADMIN_EMAIL},${ER_CUSTOMER_DOMAIN_EMAIL}")
+max_run_alarm: 240
+term_run_time: 14400
+condition: s(ER_CUSTOMER_EXTRACT)
+std_out_file: "/var/log/autosys/entity-resolution/customers/ER_CUSTOMER_PROCESS.out"
+std_err_file: "/var/log/autosys/entity-resolution/customers/ER_CUSTOMER_PROCESS.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/run_entity_resolution_stage.sh --domain customers --stage process
+
+/* STEP 3: LOAD MATCHED RESULTS TO SNOWFLAKE */
+insert_job: ER_CUSTOMER_LOAD job_type: c
+description: "Load matched customer data to Snowflake"
+owner: autosys
+alarm_if_fail: 1
+box_name: ER_CUSTOMER_BOX
+permission: gx,ge,wx,we
+notification: success("${ER_ADMIN_EMAIL},${ER_CUSTOMER_DOMAIN_EMAIL}"),fail("${ER_ADMIN_EMAIL},${ER_CUSTOMER_DOMAIN_EMAIL}")
+max_run_alarm: 60
+term_run_time: 3600
+condition: s(ER_CUSTOMER_PROCESS)
+std_out_file: "/var/log/autosys/entity-resolution/customers/ER_CUSTOMER_LOAD.out"
+std_err_file: "/var/log/autosys/entity-resolution/customers/ER_CUSTOMER_LOAD.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/run_entity_resolution_stage.sh --domain customers --stage load
+
+/* -----------------------------------------------------
+ * PRODUCT DOMAIN SEQUENTIAL JOBS
+ * ----------------------------------------------------- */
+
+/* STEP 1: EXTRACT DATA FROM SNOWFLAKE TO S3 */
+insert_job: ER_PRODUCT_EXTRACT job_type: c
+description: "Extract product data from Snowflake to S3"
+owner: autosys
+alarm_if_fail: 1
+box_name: ER_PRODUCT_BOX
+permission: gx,ge,wx,we
+notification: fail("${ER_ADMIN_EMAIL},${ER_PRODUCT_DOMAIN_EMAIL}")
+max_run_alarm: 60
+term_run_time: 3600
+std_out_file: "/var/log/autosys/entity-resolution/products/ER_PRODUCT_EXTRACT.out"
+std_err_file: "/var/log/autosys/entity-resolution/products/ER_PRODUCT_EXTRACT.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/run_entity_resolution_stage.sh --domain products --stage extract
+
+/* STEP 2: PROCESS DATA THROUGH AWS ENTITY RESOLUTION */
+insert_job: ER_PRODUCT_PROCESS job_type: c
+description: "Process product data through AWS Entity Resolution"
+owner: autosys
+alarm_if_fail: 1
+box_name: ER_PRODUCT_BOX
+permission: gx,ge,wx,we
+notification: fail("${ER_ADMIN_EMAIL},${ER_PRODUCT_DOMAIN_EMAIL}")
+max_run_alarm: 360
+term_run_time: 21600
+condition: s(ER_PRODUCT_EXTRACT)
+std_out_file: "/var/log/autosys/entity-resolution/products/ER_PRODUCT_PROCESS.out"
+std_err_file: "/var/log/autosys/entity-resolution/products/ER_PRODUCT_PROCESS.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/run_entity_resolution_stage.sh --domain products --stage process
+
+/* STEP 3: LOAD MATCHED RESULTS TO SNOWFLAKE */
+insert_job: ER_PRODUCT_LOAD job_type: c
+description: "Load matched product data to Snowflake"
+owner: autosys
+alarm_if_fail: 1
+box_name: ER_PRODUCT_BOX
+permission: gx,ge,wx,we
+notification: success("${ER_ADMIN_EMAIL},${ER_PRODUCT_DOMAIN_EMAIL}"),fail("${ER_ADMIN_EMAIL},${ER_PRODUCT_DOMAIN_EMAIL}")
+max_run_alarm: 60
+term_run_time: 3600
+condition: s(ER_PRODUCT_PROCESS)
+std_out_file: "/var/log/autosys/entity-resolution/products/ER_PRODUCT_LOAD.out"
+std_err_file: "/var/log/autosys/entity-resolution/products/ER_PRODUCT_LOAD.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/run_entity_resolution_stage.sh --domain products --stage load
+
+/* -----------------------------------------------------
+ * VENDOR DOMAIN SEQUENTIAL JOBS
+ * ----------------------------------------------------- */
+
+/* STEP 1: EXTRACT DATA FROM SNOWFLAKE TO S3 */
+insert_job: ER_VENDOR_EXTRACT job_type: c
+description: "Extract vendor data from Snowflake to S3"
+owner: autosys
+alarm_if_fail: 1
+box_name: ER_VENDOR_BOX
+permission: gx,ge,wx,we
+notification: fail("${ER_ADMIN_EMAIL},${ER_VENDOR_DOMAIN_EMAIL}")
+max_run_alarm: 60
+term_run_time: 3600
+std_out_file: "/var/log/autosys/entity-resolution/vendors/ER_VENDOR_EXTRACT.out"
+std_err_file: "/var/log/autosys/entity-resolution/vendors/ER_VENDOR_EXTRACT.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/run_entity_resolution_stage.sh --domain vendors --stage extract
+
+/* STEP 2: PROCESS DATA THROUGH AWS ENTITY RESOLUTION */
+insert_job: ER_VENDOR_PROCESS job_type: c
+description: "Process vendor data through AWS Entity Resolution"
+owner: autosys
+alarm_if_fail: 1
+box_name: ER_VENDOR_BOX
+permission: gx,ge,wx,we
+notification: fail("${ER_ADMIN_EMAIL},${ER_VENDOR_DOMAIN_EMAIL}")
+max_run_alarm: 300
+term_run_time: 18000
+condition: s(ER_VENDOR_EXTRACT)
+std_out_file: "/var/log/autosys/entity-resolution/vendors/ER_VENDOR_PROCESS.out"
+std_err_file: "/var/log/autosys/entity-resolution/vendors/ER_VENDOR_PROCESS.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/run_entity_resolution_stage.sh --domain vendors --stage process
+
+/* STEP 3: LOAD MATCHED RESULTS TO SNOWFLAKE */
+insert_job: ER_VENDOR_LOAD job_type: c
+description: "Load matched vendor data to Snowflake"
+owner: autosys
+alarm_if_fail: 1
+box_name: ER_VENDOR_BOX
+permission: gx,ge,wx,we
+notification: success("${ER_ADMIN_EMAIL},${ER_VENDOR_DOMAIN_EMAIL}"),fail("${ER_ADMIN_EMAIL},${ER_VENDOR_DOMAIN_EMAIL}")
+max_run_alarm: 60
+term_run_time: 3600
+condition: s(ER_VENDOR_PROCESS)
+std_out_file: "/var/log/autosys/entity-resolution/vendors/ER_VENDOR_LOAD.out"
+std_err_file: "/var/log/autosys/entity-resolution/vendors/ER_VENDOR_LOAD.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/run_entity_resolution_stage.sh --domain vendors --stage load
+
+/* -----------------------------------------------------
+ * ON-DEMAND SEQUENTIAL JOBS
+ * ----------------------------------------------------- */
+
+/* ON-DEMAND BOX */
+insert_job: ER_ONDEMAND_BOX job_type: BOX
+description: "On-demand Entity Resolution Box Job"
+owner: autosys
+alarm_if_fail: 1
+permission: gx,ge,wx,we
+notification: fail("${ER_ADMIN_EMAIL},${ER_TEAM_EMAIL}")
+
+/* STEP 1: EXTRACT DATA FROM SNOWFLAKE TO S3 */
+insert_job: ER_ONDEMAND_EXTRACT job_type: c
+description: "Extract data from Snowflake to S3 (on-demand)"
+owner: autosys
+alarm_if_fail: 1
+box_name: ER_ONDEMAND_BOX
+permission: gx,ge,wx,we
+notification: fail("${ER_ADMIN_EMAIL},${ER_TEAM_EMAIL}")
+max_run_alarm: 60
+term_run_time: 3600
+std_out_file: "/var/log/autosys/entity-resolution/ondemand/ER_ONDEMAND_EXTRACT.out"
+std_err_file: "/var/log/autosys/entity-resolution/ondemand/ER_ONDEMAND_EXTRACT.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/run_entity_resolution_stage.sh --stage extract
+envvars: DOMAIN="customers",PROCESS_DATE="$(date +\"%Y-%m-%d\")"
+
+/* STEP 2: PROCESS DATA THROUGH AWS ENTITY RESOLUTION */
+insert_job: ER_ONDEMAND_PROCESS job_type: c
+description: "Process data through AWS Entity Resolution (on-demand)"
+owner: autosys
+alarm_if_fail: 1
+box_name: ER_ONDEMAND_BOX
+permission: gx,ge,wx,we
+notification: fail("${ER_ADMIN_EMAIL},${ER_TEAM_EMAIL}")
+max_run_alarm: 240
+term_run_time: 14400
+condition: s(ER_ONDEMAND_EXTRACT)
+std_out_file: "/var/log/autosys/entity-resolution/ondemand/ER_ONDEMAND_PROCESS.out"
+std_err_file: "/var/log/autosys/entity-resolution/ondemand/ER_ONDEMAND_PROCESS.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/run_entity_resolution_stage.sh --stage process
+envvars: DOMAIN="customers",PROCESS_DATE="$(date +\"%Y-%m-%d\")"
+
+/* STEP 3: LOAD MATCHED RESULTS TO SNOWFLAKE */
+insert_job: ER_ONDEMAND_LOAD job_type: c
+description: "Load matched data to Snowflake (on-demand)"
+owner: autosys
+alarm_if_fail: 1
+box_name: ER_ONDEMAND_BOX
+permission: gx,ge,wx,we
+notification: success("${ER_ADMIN_EMAIL},${ER_TEAM_EMAIL}"),fail("${ER_ADMIN_EMAIL},${ER_TEAM_EMAIL}")
+max_run_alarm: 60
+term_run_time: 3600
+condition: s(ER_ONDEMAND_PROCESS)
+std_out_file: "/var/log/autosys/entity-resolution/ondemand/ER_ONDEMAND_LOAD.out"
+std_err_file: "/var/log/autosys/entity-resolution/ondemand/ER_ONDEMAND_LOAD.err"
+profile: /etc/autosys/profiles/aws_profile
+command: /path/to/entity-resolution-pipeline/scripts/run_entity_resolution_stage.sh --stage load
+envvars: DOMAIN="customers",PROCESS_DATE="$(date +\"%Y-%m-%d\")"

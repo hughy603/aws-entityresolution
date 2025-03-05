@@ -1,0 +1,95 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Service Catalog Product for Entity Resolution'
+
+Parameters:
+  PortfolioName:
+    Type: String
+    Description: Name of the portfolio
+    Default: 'Data Entity Resolution Portfolio'
+
+  PortfolioDescription:
+    Type: String
+    Description: Description of the portfolio
+    Default: 'Portfolio containing Entity Resolution products'
+
+  PortfolioOwner:
+    Type: String
+    Description: Owner of the portfolio
+    Default: 'data-engineering-team@example.com'
+
+  ProductName:
+    Type: String
+    Description: Name of the product
+    Default: 'Entity Resolution Matching Workflow'
+
+  ProductDescription:
+    Type: String
+    Description: Description of the product
+    Default: 'A product that creates and configures AWS Entity Resolution matching workflow and required infrastructure'
+
+  ProductOwner:
+    Type: String
+    Description: Owner of the product
+    Default: 'data-engineering-team@example.com'
+
+  ProductSupportDescription:
+    Type: String
+    Description: Support information for the product
+    Default: 'For any issues or questions, contact data-engineering-team@example.com'
+
+Resources:
+  # Service Catalog Portfolio
+  Portfolio:
+    Type: AWS::ServiceCatalog::Portfolio
+    Properties:
+      DisplayName: !Ref PortfolioName
+      Description: !Ref PortfolioDescription
+      ProviderName: !Ref PortfolioOwner
+
+  # Service Catalog Product
+  Product:
+    Type: AWS::ServiceCatalog::CloudFormationProduct
+    Properties:
+      Name: !Ref ProductName
+      Description: !Ref ProductDescription
+      Owner: !Ref ProductOwner
+      SupportDescription: !Ref ProductSupportDescription
+      SupportEmail: !Ref ProductOwner
+      ProvisioningArtifactParameters:
+        - Name: 'v1.0'
+          Description: 'Initial version'
+          Info:
+            LoadTemplateFromURL: !Sub 'https://${AWS::AccountId}-templates.s3.${AWS::Region}.amazonaws.com/entity-resolution-template.yaml'
+
+  # Associate Product with Portfolio
+  ProductAssociation:
+    Type: AWS::ServiceCatalog::PortfolioProductAssociation
+    Properties:
+      PortfolioId: !Ref Portfolio
+      ProductId: !Ref Product
+
+  # Principal Association for the Portfolio
+  PrincipalAssociation:
+    Type: AWS::ServiceCatalog::PortfolioPrincipalAssociation
+    Properties:
+      PortfolioId: !Ref Portfolio
+      PrincipalARN: !Sub 'arn:aws:iam::${AWS::AccountId}:role/ServiceCatalogEndUserRole'
+      PrincipalType: IAM
+
+  # Launch Constraint
+  LaunchConstraint:
+    Type: AWS::ServiceCatalog::LaunchRoleConstraint
+    Properties:
+      PortfolioId: !Ref Portfolio
+      ProductId: !Ref Product
+      RoleARN: !Sub 'arn:aws:iam::${AWS::AccountId}:role/ServiceCatalogLaunchRole'
+      Description: 'Launch constraint for Entity Resolution product'
+
+Outputs:
+  PortfolioId:
+    Description: 'Portfolio ID'
+    Value: !Ref Portfolio
+
+  ProductId:
+    Description: 'Product ID'
+    Value: !Ref Product

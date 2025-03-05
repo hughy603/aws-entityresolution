@@ -1,0 +1,522 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Entity Resolution Service Catalog Product - Creates Entity Resolution Matching Workflow and Dependencies'
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: 'Entity Resolution Configuration'
+        Parameters:
+          - EntityResolutionRoleName
+          - S3BucketName
+          - MatchingWorkflowName
+          - SchemaName
+          - EnableMonitoring
+      - Label:
+          default: 'Input Schema Configuration'
+        Parameters:
+          - FieldTypeMappings
+          - InputSchemaAttributeNames
+          - DefaultMatchKeyType
+      - Label:
+          default: 'Matching Configuration'
+        Parameters:
+          - MatchingTechnique
+          - FuzzyMatchingThreshold
+          - EnableProviderMatching
+          - ProviderServiceName
+      - Label:
+          default: 'Output Configuration'
+        Parameters:
+          - ApplyNormalization
+          - IncludeSourceData
+          - OutputFormat
+
+Parameters:
+  EntityResolutionRoleName:
+    Type: String
+    Description: Name of the IAM role for Entity Resolution (will be created if does not exist)
+    Default: entity-resolution-service-role
+
+  S3BucketName:
+    Type: String
+    Description: Name of S3 bucket to store entity data (will be created if does not exist)
+    Default: entity-resolution-data
+
+  MatchingWorkflowName:
+    Type: String
+    Description: Name of the Entity Resolution Matching Workflow
+    Default: entity-matching-workflow
+
+  SchemaName:
+    Type: String
+    Description: Name of the Entity Resolution Schema
+    Default: entity-schema
+
+  InputSchemaAttributeNames:
+    Type: CommaDelimitedList
+    Description: Comma-separated list of attribute names (e.g., id,name,email,phone,address,company)
+    Default: id,name,email,phone,address,company
+
+  FieldTypeMappings:
+    Type: String
+    Description: |
+      JSON string mapping field names to their types and subtypes. Format:
+      {
+        "field_name": {"type": "TYPE", "subtype": "SUBTYPE", "group": "GROUP_NAME", "matchKey": true/false},
+        ...
+      }
+      Types: TEXT, NAME, EMAIL, PHONE_NUMBER, ADDRESS, DATE, PERSON_IDENTIFIER, ACCOUNT_NUMBER
+      Subtypes: NONE, FIRST, LAST, MOBILE, HOME, WORK, STREET, CITY, STATE, ZIP, DOB, SSN
+    Default: |
+      {
+        "id": {"type": "PERSON_IDENTIFIER", "subtype": "NONE", "group": "default", "matchKey": true},
+        "name": {"type": "NAME", "subtype": "NONE", "group": "default", "matchKey": true},
+        "email": {"type": "EMAIL", "subtype": "NONE", "group": "default", "matchKey": true},
+        "phone": {"type": "PHONE_NUMBER", "subtype": "NONE", "group": "default", "matchKey": true},
+        "address": {"type": "ADDRESS", "subtype": "NONE", "group": "default", "matchKey": true},
+        "company": {"type": "TEXT", "subtype": "NONE", "group": "default", "matchKey": false}
+      }
+
+  DefaultMatchKeyType:
+    Type: String
+    Description: Default field type for keys not explicitly mapped in FieldTypeMappings
+    Default: TEXT
+    AllowedValues:
+      - TEXT
+      - NAME
+      - EMAIL
+      - PHONE_NUMBER
+      - ADDRESS
+      - DATE
+      - PERSON_IDENTIFIER
+      - ACCOUNT_NUMBER
+
+  MatchingTechnique:
+    Type: String
+    Description: The technique to use for entity matching
+    Default: RULE_MATCHING
+    AllowedValues:
+      - RULE_MATCHING
+      - ML_MATCHING
+      - PROVIDER_SERVICE
+
+  FuzzyMatchingThreshold:
+    Type: Number
+    Description: Threshold for fuzzy matching (between 0.0 and 1.0, higher is more strict)
+    Default: 0.7
+    MinValue: 0.0
+    MaxValue: 1.0
+
+  EnableProviderMatching:
+    Type: String
+    Description: Enable matching using a provider service
+    Default: false
+    AllowedValues:
+      - true
+      - false
+
+  ProviderServiceName:
+    Type: String
+    Description: Name of the provider service to use (when EnableProviderMatching is true)
+    Default: NONE
+    AllowedValues:
+      - NONE
+      - AWS_LIVEWIRE
+      - AWS_SIN
+
+  ApplyNormalization:
+    Type: String
+    Description: Whether to apply normalization to the output data
+    Default: true
+    AllowedValues:
+      - true
+      - false
+
+  IncludeSourceData:
+    Type: String
+    Description: Whether to include source data in the output
+    Default: true
+    AllowedValues:
+      - true
+      - false
+
+  OutputFormat:
+    Type: String
+    Description: Format for output data
+    Default: CSV
+    AllowedValues:
+      - CSV
+      - JSON
+      - PARQUET
+
+  EnableMonitoring:
+    Type: String
+    Description: Whether to enable CloudWatch metrics with Dynatrace monitoring and Splunk logging
+    Default: true
+    AllowedValues:
+      - true
+      - false
+
+  MatchingRules:
+    Type: String
+    Description: |
+      JSON configuration for matching rules. Format:
+      [
+        {"rule": "EXACT", "matchingKeys": ["EMAIL"]},
+        {"rule": "FUZZY", "matchingKeys": [{"name": "NAME", "similarity": 0.8}]}
+      ]
+
+Conditions:
+  UseProviderMatching: !Equals [!Ref EnableProviderMatching, "true"]
+  UseRuleMatching: !Equals [!Ref MatchingTechnique, "RULE_MATCHING"]
+  UseMLMatching: !Equals [!Ref MatchingTechnique, "ML_MATCHING"]
+  UseExistingBucket: !Not [!Equals [!Ref ExistingS3BucketName, ""]]
+
+Rules:
+  ValidProviderService:
+    RuleCondition: !Equals [!Ref EnableProviderMatching, "true"]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref ProviderServiceName, "NONE"]]
+        AssertDescription: "ProviderServiceName must not be NONE when EnableProviderMatching is true"
+
+  ValidFuzzyThreshold:
+    RuleCondition: !Equals [!Ref MatchingTechnique, "RULE_MATCHING"]
+    Assertions:
+      - Assert: !And
+          - !Not [!Equals [!Ref FuzzyMatchingThreshold, 0.0]]
+          - !Not [!Equals [!Ref FuzzyMatchingThreshold, 1.0]]
+        AssertDescription: "FuzzyMatchingThreshold must be between 0.0 and 1.0 (exclusive) for RULE_MATCHING"
+
+Resources:
+  # S3 Bucket for Entity Resolution Data
+  EntityResolutionBucket:
+    Type: AWS::S3::Bucket
+    Condition: !Not [!Condition UseExistingBucket]
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref S3BucketName
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-entity-resolution-bucket"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # IAM Role for Entity Resolution
+  EntityResolutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref EntityResolutionRoleName
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: entityresolution.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: EntityResolutionS3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !If
+                    - UseExistingBucket
+                    - !Sub "arn:aws:s3:::${ExistingS3BucketName}"
+                    - !GetAtt EntityResolutionBucket.Arn
+                  - !If
+                    - UseExistingBucket
+                    - !Sub "arn:aws:s3:::${ExistingS3BucketName}/*"
+                    - !Sub "${EntityResolutionBucket.Arn}/*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-entity-resolution-role"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Entity Resolution Schema Mapping
+  EntitySchema:
+    Type: AWS::EntityResolution::SchemaMapping
+    Properties:
+      SchemaName: !Ref SchemaName
+      MappedInputFields: !GetAtt SchemaFieldMappingFunction.SchemaFields
+      Description: !Sub "Entity schema for ${SchemaName}"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-entity-schema"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Entity Resolution Matching Workflow
+  MatchingWorkflow:
+    Type: AWS::EntityResolution::MatchingWorkflow
+    Properties:
+      WorkflowName: !Ref MatchingWorkflowName
+      InputSourceConfig:
+        InputSourceARN: !GetAtt EntitySchema.SchemaArn
+      OutputSourceConfig:
+        OutputS3Path: !If
+          - UseExistingBucket
+          - !Sub "s3://${ExistingS3BucketName}/output/"
+          - !Sub "s3://${S3BucketName}/output/"
+        ApplyNormalization: !Ref ApplyNormalization
+        Output:
+          - Name: "resolution-output"
+            OutputS3Path: !If
+              - UseExistingBucket
+              - !Sub "s3://${ExistingS3BucketName}/golden-records/"
+              - !Sub "s3://${S3BucketName}/golden-records/"
+            Format: !Ref OutputFormat
+      RoleARN: !GetAtt EntityResolutionRole.Arn
+      ResolutionTechniques:
+        !If
+          - UseProviderMatching
+          - ProviderProperties:
+              ProviderServiceName: !Ref ProviderServiceName
+              IntermediateSourceConfiguration:
+                IntermediateS3Path: !If
+                  - UseExistingBucket
+                  - !Sub "s3://${ExistingS3BucketName}/intermediate/"
+                  - !Sub "s3://${S3BucketName}/intermediate/"
+          - !If
+            - UseRuleMatching
+            - ResolutionType: RULE_MATCHING
+              RuleBasedProperties:
+                Rules:
+                  - MatchingKeys:
+                      - !GetAtt SchemaFieldMappingFunction.MatchingRules
+                    RuleName: "entity-matching-rule"
+                    MatchingThreshold: !Ref FuzzyMatchingThreshold
+            - !If
+              - UseMLMatching
+              - ResolutionType: ML_MATCHING
+                # Add ML matching properties here if needed
+              - ResolutionType: RULE_MATCHING # Default fallback
+
+      Description: !Sub "Entity resolution workflow for ${MatchingWorkflowName}"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-matching-workflow"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Custom resource to generate schema field mappings
+  SchemaFieldMappingFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt SchemaFieldMappingRole.Arn
+      Runtime: python3.12
+      Timeout: 30
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import cfnresponse
+
+          def handler(event, context):
+              try:
+                  # Skip DELETE events
+                  if event['RequestType'] == 'Delete':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+
+                  # Get field type mappings from event
+                  field_mappings = json.loads(event['ResourceProperties']['FieldTypeMappings'])
+                  attribute_names = event['ResourceProperties']['InputSchemaAttributeNames']
+
+                  # If attribute_names is a string, split it
+                  if isinstance(attribute_names, str):
+                      attribute_names = attribute_names.split(',')
+
+                  schema_fields = []
+                  matching_rules = []
+
+                  # Process each field
+                  for field_name in attribute_names:
+                      field_name = field_name.strip()
+
+                      # Get field mapping or use default
+                      if field_name in field_mappings:
+                          field_map = field_mappings[field_name]
+                          field_type = field_map.get('type', 'TEXT')
+                          field_subtype = field_map.get('subtype', 'NONE')
+                          match_key = field_map.get('matchKey', False)
+                      else:
+                          field_type = event['ResourceProperties']['DefaultMatchKeyType']
+                          field_subtype = 'NONE'
+                          match_key = False
+
+                      # Add to schema fields
+                      schema_fields.append({
+                          'SchemaInputAttribute': field_name,
+                          'SchemaName': field_name,
+                          'Type': field_type,
+                          'SubType': field_subtype
+                      })
+
+                      # Add to matching rules if match key
+                      if match_key:
+                          matching_rules.append({
+                              'SchemaAttributeName': field_name
+                          })
+
+                  response_data = {
+                      'SchemaFields': schema_fields,
+                      'MatchingRules': matching_rules
+                  }
+
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+      Environment:
+        Variables:
+          LOG_LEVEL: INFO
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-schema-mapping-function"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # IAM Role for Schema Field Mapping Function
+  SchemaFieldMappingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-schema-mapping-role"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Outputs for created resources
+  EntitySchemaOutput:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${Environment}/EntityResolution/${SchemaName}/SchemaArn"
+      Type: String
+      Value: !GetAtt EntitySchema.SchemaArn
+      Description: ARN of the Entity Resolution Schema
+      Tags:
+        Name: !Sub "${AWS::StackName}-entity-schema-output"
+        Environment: !Ref Environment
+
+  MatchingWorkflowOutput:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${Environment}/EntityResolution/${MatchingWorkflowName}/WorkflowArn"
+      Type: String
+      Value: !GetAtt MatchingWorkflow.WorkflowArn
+      Description: ARN of the Entity Resolution Matching Workflow
+      Tags:
+        Name: !Sub "${AWS::StackName}-matching-workflow-output"
+        Environment: !Ref Environment
+
+  # Add monitoring resources if enabled
+  MonitoringDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Condition: EnableMonitoring
+    Properties:
+      DashboardName: !Sub "${AWS::StackName}-entity-resolution-dashboard"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/EntityResolution", "JobsStarted", "WorkflowArn", "${MatchingWorkflow.WorkflowArn}" ],
+                  [ ".", "JobsCompleted", ".", "." ],
+                  [ ".", "JobsFailed", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "Entity Resolution Jobs",
+                "period": 300
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/EntityResolution", "RecordsMatched", "WorkflowArn", "${MatchingWorkflow.WorkflowArn}" ],
+                  [ ".", "RecordsProcessed", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "Entity Resolution Records",
+                "period": 300
+              }
+            }
+          ]
+        }
+
+Outputs:
+  EntityResolutionServiceRoleArn:
+    Description: IAM Role ARN for Entity Resolution
+    Value: !GetAtt EntityResolutionRole.Arn
+
+  S3BucketName:
+    Description: S3 Bucket Name for Entity Resolution Data
+    Value: !Ref EntityResolutionBucket
+
+  MatchingWorkflowArn:
+    Description: Matching Workflow ARN
+    Value: !If
+      - UseRuleMatching
+      - !Ref EntityResolutionRuleMatchingWorkflow
+      - !If
+        - UseMLMatching
+        - !Ref EntityResolutionMLMatchingWorkflow
+        - !If
+          - UseProviderMatching
+          - !Ref EntityResolutionProviderService
+          - "No workflow created"
+
+  SchemaArn:
+    Description: Schema ARN
+    Value: !Ref EntityResolutionSchema
+
+  MonitoringDashboard:
+    Condition: EnableMonitoring
+    Description: CloudWatch Dashboard URL
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${MonitoringDashboard}'

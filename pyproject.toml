@@ -1,0 +1,232 @@
+[tool.poetry]
+name = "aws-entity-resolution"
+version = "0.1.0"
+description = "AWS Entity Resolution pipeline for creating golden records from Snowflake data"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+packages = [{include = "aws_entity_resolution", from = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+boto3 = "^1.34.0"
+snowflake-connector-python = "^3.6.0"
+pydantic = "^2.5.0"
+python-dotenv = "^1.0.0"
+typer = "^0.10.0"
+pydantic-settings = "^2.8.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+pytest-cov = "^4.1.0"
+pytest-mock = "^3.12.0"
+ruff = "^0.3.0"
+mypy = "^1.7.0"
+black = "^23.11.0"
+pre-commit = "^3.5.0"
+moto = {extras = ["s3"], version = "^5.1.1"}
+bandit = {extras = ["toml"], version = "^1.8.3"}
+pytest-env = "0.8.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+# Main CLI command
+entity-resolution = "aws_entity_resolution.cli:app"
+
+# Legacy commands for backward compatibility
+entity-extract = "aws_entity_resolution.cli:extract_app"
+entity-process = "aws_entity_resolution.cli:process_app"
+entity-load = "aws_entity_resolution.cli:load_app"
+
+# Allow direct CLI access to the pipeline
+er-extract = "aws_entity_resolution.cli:extract_app"
+er-process = "aws_entity_resolution.cli:process_app"
+er-load = "aws_entity_resolution.cli:load_app"
+er-pipeline = "aws_entity_resolution.cli:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+env_files = [".env.test"]
+env_override_existing_values = false
+
+[tool.ruff]
+select = [
+    "E", "F", "B", "I", "W", "C90", "N", "UP", "S",
+    "BLE", "A", "C4", "T10", "ICN", "PIE", "PT",
+    "RET", "SIM", "TID", "ARG", "ERA", "PL", "Q",
+    "RUF", "D"
+]
+extend-safe-fixes = ["B", "C4", "PIE", "SIM", "UP", "RET", "I"]
+ignore = [
+    "E501",    # Line too long
+    "B008",    # Function call in default argument
+    "RET504",  # Unnecessary variable assignment before return statement
+    "PT019",   # Fixture without leading underscore
+    "PT012",   # use pytest.raises() instead of assertRaises()
+    "ARG002",  # Unused method argument
+    "TRY003",  # Long exception messages outside of exception class
+    "RUF012",  # Mutable class attributes should be annotated with typing.ClassVar
+    "UP007",   # Use X | Y for type unions
+    "E203",    # Space before : (from your flake8 config)
+    "E266",    # Too many leading # for block comment
+    "S602",    # subprocess call with shell=True identified
+    "S603",    # subprocess call: check for execution of untrusted input
+    "BLE001",  # Do not catch blind exception: `Exception`
+    "B904",    # Within an `except` clause, raise exceptions with `raise ... from err`
+    "S608",    # Possible SQL injection vector
+    "ARG001",  # Unused function argument
+    "PLR2004", # Magic value used in comparison
+    "PT011",   # pytest.raises(ValueError) is too broad
+    "UP035",   # `typing.Dict` is deprecated
+    "UP006",   # Use `dict` instead of `Dict`
+    "C901",    # Function is too complex
+    "PLR0912", # Too many branches
+    "W293",    # Blank line contains whitespace
+    "F841",    # Local variable is assigned but never used
+    "E741",    # Ambiguous variable name
+    "F401",    # Imported but unused
+    "D100",    # Missing docstring in public module
+    "D101",    # Missing docstring in public class
+    "D102",    # Missing docstring in public method
+    "D103",    # Missing docstring in public function
+    "D104",    # Missing docstring in public package
+    "D107",    # Missing docstring in __init__
+    "D203",    # 1 blank line required before class docstring
+    "D213",    # Multi-line docstring summary should start at the second line
+    "D406",    # Section name should end with a newline
+    "D407",    # Missing dashed underline after section
+    "D413",    # Missing blank line after last section
+    "D205",    # 1 blank line required between summary line and description
+    "S103",    # Chmod setting a permissive mask
+    "S607",    # Starting a process with a partial executable path
+    "PLR0124", # Missing type annotation for self in method
+    "PLR0133", # Missing type annotation for cls in classmethod
+    "ANN001",  # Missing type annotation for function argument
+    "ANN002",  # Missing type annotation for *args
+    "ANN003",  # Missing type annotation for **kwargs
+    "ANN101",  # Missing type annotation for self in method
+    "ANN102",  # Missing type annotation for cls in classmethod
+]
+
+[tool.ruff.pydocstyle]
+convention = "google"
+
+[tool.ruff.per-file-ignores]
+"tests/*" = [
+    "S101",   # Use of assert
+    "ARG001", # Unused function argument
+    "TID252", # Relative imports from parent modules
+    "S105",   # Hard-coded password
+    "S106",   # Hard-coded password
+    "S107",   # Hard-coded password
+    "ARG005", # Unused lambda argument
+    "E712",   # Comparison with True/False
+    "S301",   # pickle usage
+    "D",      # Ignore all documentation-related issues in tests
+    "E731",   # Do not assign a lambda expression, use a def
+    "F401",   # Allow unused imports in tests
+    "F841",   # Allow unused variables in tests
+    "UP035"   # Allow deprecated typing in tests
+]
+"conftest.py" = ["S101", "ARG001", "D"]
+"**/cli.py" = ["B008", "D401", "C901", "F401", "ANN001", "ANN101"]
+"src/*/__init__.py" = ["F401", "D104"]
+"src/aws_entity_resolution/**/__main__.py" = ["E402"]
+"terraform/**/*.py" = ["D", "S"]
+"scripts/**/*.py" = ["D", "S"]
+"fix_imports.py" = ["D", "S", "F401", "BLE001"]
+"src/aws_entity_resolution/aws_utils.py" = ["F401"]
+"src/aws_entity_resolution/config/settings.py" = ["D100", "F401"]
+"src/aws_entity_resolution/extractor/cli.py" = ["F401"]
+"src/aws_entity_resolution/loader/cli.py" = ["D100", "F401", "C901", "BLE001", "ANN001"]
+"src/aws_entity_resolution/processor/cli.py" = ["F401", "F841", "BLE001"]
+"src/aws_entity_resolution/services.py" = ["PLR0124", "ANN101"]
+"src/aws_entity_resolution/loader/loader.py" = ["PLR0124", "PLR0133", "C901", "ANN003", "ANN101"]
+"src/aws_entity_resolution/config/__init__.py" = ["PLR0124", "PLR0133", "ANN102"]
+"src/aws_entity_resolution/extractor/extractor.py" = ["BLE001"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39"]
+exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | build
+  | dist
+)/
+'''
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+explicit_package_bases = true
+namespace_packages = true
+
+# Add these configurations
+disallow_incomplete_defs = false  # Allow partial type annotations
+ignore_missing_imports = true    # Ignore missing stubs for external packages
+disable_error_code = ["no-any-return", "var-annotated", "assignment", "no-untyped-def"]  # Disable less critical error codes
+
+# Module-specific ignores
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+check_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = "snowflake.connector.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "boto3.*"
+ignore_missing_imports = true
+
+# Fix for duplicate module handler.py files in lambda folders
+[[tool.mypy.overrides]]
+module = "terraform.entity-resolution-pipeline.lambda.extract.handler"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "terraform.entity-resolution-pipeline.lambda.process.handler"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "terraform.entity-resolution-pipeline.lambda.load.handler"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "terraform.entity-resolution-pipeline.lambda.notify.handler"
+ignore_errors = true
+
+# Add exclusions for specific files that may have similar issues
+[[tool.mypy.overrides]]
+module = "terraform.*"
+ignore_errors = true
+
+[tool.bandit]
+exclude_dirs = ["tests", "docs", ".venv"]
+# Add more skips for non-serious issues
+skips = [
+    "B101",  # Skip assert statements
+    "B104",  # Hardcoded bind addresses for tests
+    "B110",  # Try-except-pass patterns in specific cases
+    "B311",  # Random not used for security/crypto
+    "B603",  # subprocess with shell=True where needed
+    "B607",  # Start process with a partial path
+]
+target-version = "py312"

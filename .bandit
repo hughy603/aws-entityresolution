@@ -1,0 +1,15 @@
+[bandit]
+targets: src
+exclude: /tests,/docs,/build,/dist
+
+# Set the confidence level for reporting
+confidence-level: medium
+
+# Set the severity level for reporting
+severity-level: medium
+
+# You can explicitly exclude specific tests
+skips: B101
+
+# You can also list specific tests to run
+tests: B201,B301

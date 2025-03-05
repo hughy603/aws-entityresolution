@@ -1,0 +1,170 @@
+^C
+^C
+^C
+^C
+^C
+^C
+^C
+^C
+echo 'os.chmod(output_file, 0o755)  # noqa: S103' > temp_line.txt && sed -i '129s/.*$/    os.chmod(output_file, 0o755)  # noqa: S103/' terraform/entity-resolution-pipeline/scripts/generate_entity_resolution_params.py && rm temp_line.txt
+#!/usr/bin/env python3
+"""Generate Entity Resolution Pipeline Parameters for Autosys Jobs.
+
+This script dynamically generates parameters for entity resolution jobs based on
+configuration settings and command line arguments. It can be called directly
+from Autosys or as a pre-step before running the entity resolution job.
+
+Example usage:
+    python generate_entity_resolution_params.py --domain customers --date 2023-10-01
+
+The script will output parameter file that can be sourced by the bash script.
+"""
+
+import argparse
+import json
+import logging
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+# Configure logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - {"message": %(message)s}',
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
+
+
+def setup_arg_parser() -> argparse.ArgumentParser:
+    """Set up command line argument parser."""
+    parser = argparse.ArgumentParser(description="Generate Entity Resolution Pipeline Parameters")
+    parser.add_argument(
+        "--domain", required=True, help="Data domain to process (e.g., customers, products)"
+    )
+    parser.add_argument(
+        "--date", default=datetime.now().strftime("%Y-%m-%d"), help="Processing date (YYYY-MM-DD)"
+    )
+    parser.add_argument("--input-table", help="Override source table name")
+    parser.add_argument("--output-table", help="Override target table name")
+    parser.add_argument("--config-file", default="config.json", help="Configuration file path")
+    parser.add_argument(
+        "--output-file", default="entity_resolution_params.sh", help="Output parameter file"
+    )
+    return parser
+
+
+def load_config(config_path: str, domain: str) -> Dict[str, Any]:
+    """Load configuration for the specified domain."""
+    try:
+        # Try to load config file from absolute path first
+        if os.path.isabs(config_path):
+            config_file = config_path
+        else:
+            # If not absolute, look in script directory
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            config_file = os.path.join(script_dir, config_path)
+
+            # If not found, try current directory
+            if not os.path.exists(config_file):
+                config_file = os.path.join(os.getcwd(), config_path)
+
+        with open(config_file) as f:
+            config = json.load(f)
+
+        # Get domain-specific config
+        if domain not in config:
+            raise ValueError(f"Domain '{domain}' not found in configuration")
+
+        return config[domain]
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.error(f"Error loading configuration: {e!s}")
+        raise
+
+
+def generate_parameters(
+    domain: str,
+    process_date: str,
+    domain_config: Dict[str, Any],
+    input_table: Optional[str] = None,
+    output_table: Optional[str] = None,
+) -> Dict[str, str]:
+    """Generate parameters for the entity resolution job."""
+    # Format date for S3 prefixes
+    date_formatted = process_date.replace("-", "")
+
+    # Build parameters
+    params = {
+        "PROJECT_NAME": domain_config.get("project_name", "entity-resolution"),
+        "AWS_REGION": domain_config.get("aws_region", "us-east-1"),
+        "S3_BUCKET_NAME": domain_config.get("s3_bucket_name", f"{domain}-entity-resolution-data"),
+        "S3_INPUT_PREFIX": f"{domain_config.get('s3_input_prefix', 'input')}/{date_formatted}/",
+        "S3_OUTPUT_PREFIX": f"{domain_config.get('s3_output_prefix', 'output')}/{date_formatted}/",
+        "ER_WORKFLOW_NAME": domain_config.get("er_workflow_name", f"{domain}-matching-workflow"),
+        "ER_SCHEMA_NAME": domain_config.get("er_schema_name", f"{domain}-schema"),
+        "DOMAIN": domain,
+        "PROCESS_DATE": process_date,
+        # Use overrides if provided
+        "SOURCE_TABLE": input_table or domain_config.get("source_table", f"{domain}_source"),
+        "TARGET_TABLE": output_table or domain_config.get("target_table", f"{domain}_matched"),
+    }
+
+    # Add entity attributes as comma-separated list
+    entity_attributes = domain_config.get("entity_attributes", [])
+    if entity_attributes:
+        params["ER_ENTITY_ATTRIBUTES"] = ",".join(entity_attributes)
+
+    return params
+
+
+def write_param_file(params: Dict[str, str], output_file: str) -> str:
+    """Write parameters to a bash file that can be sourced."""
+    # Create output directory if it doesn't exist
+    output_path = Path(output_file)
+    if not output_path.parent.exists():
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write parameters
+    with open(output_file, "w") as f:
+        f.write("#!/bin/bash\n")
+        f.write("# Entity Resolution Parameters\n")
+        f.write(f"# Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+
+        for key, value in params.items():
+            f.write(f'export {key}="{value}"\n')
+
+    # Make executable
+    os.chmod(output_file, 0o755  # noqa: S103)  # noqa: S103
+
+    return output_file
+
+
+def main():
+    """Main function."""
+    parser = setup_arg_parser()
+    args = parser.parse_args()
+
+    try:
+        # Load configuration for the specified domain
+        domain_config = load_config(args.config_file, args.domain)
+
+        # Generate parameters
+        params = generate_parameters(
+            args.domain, args.date, domain_config, args.input_table, args.output_table
+        )
+
+        # Write to parameter file
+        param_file = write_param_file(params, args.output_file)
+
+        logger.info(f"Parameters written to {param_file}")
+        print(f"Parameters generated successfully: {param_file}")
+
+    except Exception as e:
+        logger.error(f"Error generating parameters: {e!s}")
+        print(f"ERROR: {e!s}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

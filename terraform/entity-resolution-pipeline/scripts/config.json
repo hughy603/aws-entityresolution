@@ -1,0 +1,68 @@
+{
+    "customers": {
+        "project_name": "customer-entity-resolution",
+        "aws_region": "us-east-1",
+        "s3_bucket_name": "customer-entity-resolution-data",
+        "s3_input_prefix": "customer/input",
+        "s3_output_prefix": "customer/output",
+        "er_workflow_name": "customer-matching-workflow",
+        "er_schema_name": "customer-schema",
+        "source_table": "CUSTOMER_SOURCE",
+        "target_table": "CUSTOMER_GOLDEN_RECORD",
+        "entity_attributes": [
+            "id",
+            "first_name",
+            "last_name",
+            "email",
+            "phone",
+            "address",
+            "city",
+            "state",
+            "zip"
+        ]
+    },
+    "products": {
+        "project_name": "product-entity-resolution",
+        "aws_region": "us-east-1",
+        "s3_bucket_name": "product-entity-resolution-data",
+        "s3_input_prefix": "product/input",
+        "s3_output_prefix": "product/output",
+        "er_workflow_name": "product-matching-workflow",
+        "er_schema_name": "product-schema",
+        "source_table": "PRODUCT_SOURCE",
+        "target_table": "PRODUCT_GOLDEN_RECORD",
+        "entity_attributes": [
+            "id",
+            "sku",
+            "name",
+            "description",
+            "brand",
+            "category",
+            "manufacturer"
+        ]
+    },
+    "vendors": {
+        "project_name": "vendor-entity-resolution",
+        "aws_region": "us-east-1",
+        "s3_bucket_name": "vendor-entity-resolution-data",
+        "s3_input_prefix": "vendor/input",
+        "s3_output_prefix": "vendor/output",
+        "er_workflow_name": "vendor-matching-workflow",
+        "er_schema_name": "vendor-schema",
+        "source_table": "VENDOR_SOURCE",
+        "target_table": "VENDOR_GOLDEN_RECORD",
+        "entity_attributes": [
+            "id",
+            "name",
+            "dba",
+            "tax_id",
+            "address",
+            "city",
+            "state",
+            "zip",
+            "contact_name",
+            "contact_email",
+            "contact_phone"
+        ]
+    }
+}
