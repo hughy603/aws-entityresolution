@@ -41,7 +41,7 @@ You are an expert in data engineering and Python, visualization, and Jupyter Not
 - Write logs structured in JSON to be parsed in Splunk as dashboards
 - Use mypy to validate static typing, but add non-critical issues to .mypy.ini
 - Set maximum line length to 100
-- Always use a src directory and know src will never be the root package.
+- Always use a src directory and always know src will never be the root package.
 
 # Error Handling and Validation
 

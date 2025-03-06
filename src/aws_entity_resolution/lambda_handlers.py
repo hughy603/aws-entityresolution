@@ -4,293 +4,415 @@ This module provides unified Lambda function handlers for all steps of the Entit
 pipeline, eliminating code duplication and simplifying deployment.
 """
 
-import time
-from typing import Any, Dict
+import logging
+import os
+from typing import Any
 
-from aws_entity_resolution.config import get_settings
-from aws_entity_resolution.extractor.extractor import extract_data
-from aws_entity_resolution.loader.loader import load_records
-from aws_entity_resolution.processor.processor import (
-    find_latest_input_path,
-    start_matching_job,
-    wait_for_matching_job,
-)
-from aws_entity_resolution.services import EntityResolutionService, S3Service
-from aws_entity_resolution.utils import setup_structured_logging
+import boto3
+
+from aws_entity_resolution.config.lambda_helpers import configure_lambda_handler
+from aws_entity_resolution.config.unified import get_settings as get_config
+from aws_entity_resolution.services.entity_resolution import EntityResolutionService
+from aws_entity_resolution.services.snowflake import SnowflakeService
+from aws_entity_resolution.utils.logging import setup_structured_logging
 
 # Initialize structured logging for Splunk
-logger = setup_structured_logging()
+logger = logging.getLogger(__name__)
+setup_structured_logging()
+
+# Set default log level
+log_level = os.environ.get("LOG_LEVEL", "INFO")
+logger.setLevel(log_level)
 
 
-def extract_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    """Extract data from Snowflake to S3.
+@configure_lambda_handler
+def create_glue_table_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
+    """Create an AWS Glue table pointing to S3 data.
 
     Args:
-        event: Lambda event data, may include optional overrides for source_table
+        event: Lambda event containing database, table_name, s3_path, and schema
         context: Lambda context
 
     Returns:
-        Dictionary with extraction results including status and S3 location
+        Lambda response with table creation status
     """
-    logger.info({"message": "Starting data extraction", "event": event})
+    logger.info("Creating AWS Glue table")
 
-    # Get settings
-    settings = get_settings()
+    # Get configuration
+    config = get_config()
 
-    # Allow event-based parameter overrides
-    if "source_table" in event:
-        settings.source_table = event["source_table"]
+    # Extract parameters
+    database = event.get("database")
+    if not database:
+        msg = "Missing required parameter: database"
+        raise ValueError(msg)
 
-    # Extract data
-    result = extract_data(settings)
+    table_name = event.get("table_name")
+    if not table_name:
+        msg = "Missing required parameter: table_name"
+        raise ValueError(msg)
 
-    response = {
-        "statusCode": 200,
-        "body": {
-            "status": "success",
-            "records_extracted": result.records_extracted,
-            "s3_bucket": result.s3_bucket,
-            "s3_key": result.s3_key,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        },
-    }
+    s3_path = event.get("s3_path")
+    if not s3_path:
+        msg = "Missing required parameter: s3_path"
+        raise ValueError(msg)
 
-    logger.info(
-        {
-            "message": "Data extraction completed",
-            "records_extracted": result.records_extracted,
-            "s3_key": result.s3_key,
+    # Schema is required to define the table structure
+    schema = event.get("schema", [])
+    if not schema:
+        msg = "Missing required parameter: schema"
+        raise ValueError(msg)
+
+    # Source format (CSV, JSON, Parquet, etc.)
+    format_type = event.get("format", "csv")
+
+    # Initialize Glue client
+    glue_client = boto3.client("glue", region_name=config.aws_region)
+
+    # Extract S3 bucket and prefix from S3 path
+    s3_parts = s3_path.replace("s3://", "").split("/", 1)
+    s3_parts[0]
+    s3_parts[1] if len(s3_parts) > 1 else ""
+
+    # Create or update the table
+    try:
+        # Check if table exists
+        try:
+            glue_client.get_table(DatabaseName=database, Name=table_name)
+            table_exists = True
+        except glue_client.exceptions.EntityNotFoundException:
+            table_exists = False
+
+        # Define table input structure
+        table_input = {
+            "Name": table_name,
+            "StorageDescriptor": {
+                "Columns": schema,
+                "Location": s3_path,
+                "InputFormat": get_input_format(format_type),
+                "OutputFormat": get_output_format(format_type),
+                "SerdeInfo": get_serde_info(format_type),
+                "Parameters": {
+                    "classification": format_type,
+                },
+            },
+            "TableType": "EXTERNAL_TABLE",
+            "Parameters": {
+                "EXTERNAL": "TRUE",
+            },
         }
+
+        # Create or update the table
+        if table_exists:
+            glue_client.update_table(
+                DatabaseName=database,
+                TableInput=table_input,
+            )
+            action = "updated"
+        else:
+            glue_client.create_table(
+                DatabaseName=database,
+                TableInput=table_input,
+            )
+            action = "created"
+
+        logger.info(
+            f"Successfully {action} Glue table {database}.{table_name} pointing to {s3_path}",
+        )
+
+        return {
+            "status": "completed",
+            "action": action,
+            "database": database,
+            "table_name": table_name,
+            "s3_path": s3_path,
+        }
+
+    except glue_client.exceptions.AccessDeniedException as e:
+        logger.exception(f"Access denied when creating Glue table: {e!s}")
+        raise
+    except glue_client.exceptions.AlreadyExistsException as e:
+        logger.exception(f"Glue table already exists: {e!s}")
+        raise
+    except glue_client.exceptions.ResourceNumberLimitExceededException as e:
+        logger.exception(f"Resource limit exceeded when creating Glue table: {e!s}")
+        raise
+    except glue_client.exceptions.InvalidInputException as e:
+        logger.exception(f"Invalid input when creating Glue table: {e!s}")
+        raise
+    except (ValueError, TypeError, KeyError, AttributeError) as e:
+        logger.exception(f"Error in input parameters when creating Glue table: {e!s}")
+        raise
+    except Exception as e:
+        logger.critical(f"Unexpected error when creating Glue table: {e!s}")
+        raise
+
+
+def get_input_format(format_type: str) -> str:
+    """Get the appropriate input format based on the file format.
+
+    Args:
+        format_type: The file format (csv, json, parquet, etc.)
+
+    Returns:
+        The Hadoop input format class
+    """
+    formats = {
+        "csv": "org.apache.hadoop.mapred.TextInputFormat",
+        "json": "org.apache.hadoop.mapred.TextInputFormat",
+        "parquet": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
+        "avro": "org.apache.hadoop.hive.ql.io.avro.AvroContainerInputFormat",
+        "orc": "org.apache.hadoop.hive.ql.io.orc.OrcInputFormat",
+    }
+    return formats.get(format_type.lower(), "org.apache.hadoop.mapred.TextInputFormat")
+
+
+def get_output_format(format_type: str) -> str:
+    """Get the appropriate output format based on the file format.
+
+    Args:
+        format_type: The file format (csv, json, parquet, etc.)
+
+    Returns:
+        The Hadoop output format class
+    """
+    formats = {
+        "csv": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+        "json": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+        "parquet": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
+        "avro": "org.apache.hadoop.hive.ql.io.avro.AvroContainerOutputFormat",
+        "orc": "org.apache.hadoop.hive.ql.io.orc.OrcOutputFormat",
+    }
+    return formats.get(
+        format_type.lower(),
+        "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
     )
 
+
+def get_serde_info(format_type: str) -> dict[str, Any]:
+    """Get the appropriate SerDe information based on the file format.
+
+    Args:
+        format_type: The file format (csv, json, parquet, etc.)
+
+    Returns:
+        The SerDe information as a dictionary
+    """
+    serde_info = {
+        "csv": {
+            "SerializationLibrary": "org.apache.hadoop.hive.serde2.OpenCSVSerde",
+            "Parameters": {
+                "separatorChar": ",",
+                "quoteChar": '"',
+                "escapeChar": "\\",
+            },
+        },
+        "json": {
+            "SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe",
+            "Parameters": {},
+        },
+        "parquet": {
+            "SerializationLibrary": "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe",
+            "Parameters": {},
+        },
+        "avro": {
+            "SerializationLibrary": "org.apache.hadoop.hive.serde2.avro.AvroSerDe",
+            "Parameters": {},
+        },
+        "orc": {
+            "SerializationLibrary": "org.apache.hadoop.hive.ql.io.orc.OrcSerde",
+            "Parameters": {},
+        },
+    }
+    return serde_info.get(
+        format_type.lower(),
+        {
+            "SerializationLibrary": "org.apache.hadoop.hive.serde2.OpenCSVSerde",
+            "Parameters": {
+                "separatorChar": ",",
+                "quoteChar": '"',
+                "escapeChar": "\\",
+            },
+        },
+    )
+
+
+@configure_lambda_handler
+def entity_resolution_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
+    """Start an AWS Entity Resolution job.
+
+    Args:
+        event: Lambda event containing input_table, workflow_name, and output_path
+        context: Lambda context
+
+    Returns:
+        Lambda response with job ID
+    """
+    logger.info("Starting Entity Resolution job")
+
+    # Get configuration
+    config = get_config()
+
+    # Extract parameters
+    input_table = event.get("input_table")
+    if not input_table:
+        msg = "Missing required parameter: input_table"
+        raise ValueError(msg)
+
+    workflow_name = event.get("workflow_name", config.entity_resolution.workflow_name)
+    output_path = event.get("output_path", f"s3://{config.s3.bucket}/{config.s3.output_prefix}")
+    database = event.get("database", "")
+
+    # Initialize Entity Resolution service
+    er_service = EntityResolutionService(config)
+
+    # Start the job
+    job_id = er_service.start_matching_job(
+        input_source=f"arn:aws:glue:{config.aws_region}::table/{database}/{input_table}",
+        workflow_name=workflow_name,
+        output_path=output_path,
+    )
+
+    response = {
+        "status": "started",
+        "job_id": job_id,
+        "workflow_name": workflow_name,
+        "output_path": output_path,
+    }
+
+    logger.info(f"Entity Resolution job started with ID: {job_id}")
     return response
 
 
-def process_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    """Process data through AWS Entity Resolution.
+def get_account_id() -> str:
+    """Get the current AWS account ID.
+
+    Returns:
+        The AWS account ID
+    """
+    sts_client = boto3.client("sts")
+    return sts_client.get_caller_identity()["Account"]
+
+
+@configure_lambda_handler
+def check_entity_resolution_job_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
+    """Check the status of an AWS Entity Resolution job.
 
     Args:
-        event: Lambda event data, may include s3_key from previous step
+        event: Lambda event containing job_id
         context: Lambda context
 
     Returns:
-        Dictionary with job information including status and job_id
+        Lambda response with job status
     """
-    logger.info({"message": "Starting entity resolution processing", "event": event})
+    logger.info("Checking Entity Resolution job status")
 
-    try:
-        # Get settings
-        settings = get_settings()
+    # Get configuration
+    config = get_config()
 
-        # Create service instances
-        s3_svc = S3Service(settings)
-        er_svc = EntityResolutionService(settings)
+    # Extract parameters
+    job_id = event.get("job_id")
+    if not job_id:
+        msg = "Missing required parameter: job_id"
+        raise ValueError(msg)
 
-        # Get input file from previous step or find latest
-        input_file = None
-        if isinstance(event.get("body"), dict) and "s3_key" in event["body"]:
-            input_file = event["body"]["s3_key"]
+    # Initialize Entity Resolution service
+    er_service = EntityResolutionService(config)
 
-        # If not provided, find the latest input file
-        if not input_file:
-            input_file = find_latest_input_path(s3_svc)
+    # Check job status
+    status = er_service.get_matching_job_status(job_id)
 
-        if not input_file:
-            raise ValueError("No input data found")
+    response = {
+        "status": "in_progress" if status == "IN_PROGRESS" else "completed",
+        "job_status": status,
+        "job_id": job_id,
+    }
 
-        # Generate timestamp-based output path
-        output_prefix = f"{settings.s3.prefix}output/{time.strftime('%Y%m%d_%H%M%S')}/"
+    if status == "SUCCEEDED":
+        # Get job output location
+        output_path = event.get("output_path")
+        if output_path:
+            response["output_path"] = output_path
 
-        # Start matching job
-        job_id = start_matching_job(er_svc, input_file, output_prefix)
-
-        logger.info(
-            {
-                "message": "Entity resolution job started",
-                "job_id": job_id,
-                "input_file": input_file,
-                "output_prefix": output_prefix,
-            }
-        )
-
-        return {
-            "statusCode": 200,
-            "body": {
-                "status": "running",
-                "job_id": job_id,
-                "s3_bucket": settings.s3.bucket,
-                "input_file": input_file,
-                "output_prefix": output_prefix,
-            },
-        }
-    except Exception as e:
-        logger.error(
-            {
-                "message": "Error starting entity resolution job",
-                "error": str(e),
-            }
-        )
-
-        raise
+    logger.info(f"Entity Resolution job {job_id} status: {status}")
+    return response
 
 
-def check_status_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    """Check the status of an Entity Resolution job.
+@configure_lambda_handler
+def snowflake_load_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
+    """Load data from S3 to Snowflake.
 
     Args:
-        event: Lambda event with body containing job_id
+        event: Lambda event containing s3_path and target_table
         context: Lambda context
 
     Returns:
-        Dictionary with job status information
+        Lambda response with load status
     """
-    logger.info({"message": "Checking job status", "event": event})
+    logger.info("Starting Snowflake load process")
 
-    try:
-        # Get settings
-        settings = get_settings()
+    # Get configuration
+    config = get_config()
 
-        # Create service instance
-        er_svc = EntityResolutionService(settings)
+    # Extract parameters
+    s3_path = event.get("s3_path")
+    if not s3_path:
+        msg = "Missing required parameter: s3_path"
+        raise ValueError(msg)
 
-        # Get job ID from event
-        job_id = None
-        if isinstance(event.get("body"), dict) and "job_id" in event["body"]:
-            job_id = event["body"]["job_id"]
+    target_table = event.get("target_table", config.snowflake_target.table)
+    file_format = event.get("file_format", "CSV")
 
-        if not job_id:
-            raise ValueError("No job_id provided")
+    # Initialize Snowflake service
+    snowflake_service = SnowflakeService(config)
 
-        # Get job status
-        status_info = wait_for_matching_job(er_svc, job_id)
-
-        # Determine if job is complete
-        is_complete = status_info["status"] in ["COMPLETED", "FAILED", "CANCELED"]
-
-        logger.info(
-            {
-                "message": "Job status checked",
-                "job_id": job_id,
-                "status": status_info["status"],
-                "is_complete": is_complete,
-            }
-        )
-
-        return {
-            "statusCode": 200,
-            "body": {
-                "status": status_info["status"].lower(),
-                "is_complete": is_complete,
-                "job_id": job_id,
-                "output_location": status_info.get("output_location", ""),
-                "statistics": status_info.get("statistics", {}),
-            },
-        }
-    except Exception as e:
-        logger.error(
-            {
-                "message": "Error checking job status",
-                "error": str(e),
-            }
-        )
-
-        raise
-
-
-def load_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    """Load matched records from S3 to Snowflake.
-
-    Args:
-        event: Lambda event with output_location from previous step
-        context: Lambda context
-
-    Returns:
-        Dictionary with loading results
-    """
-    logger.info({"message": "Starting data loading", "event": event})
-
-    try:
-        # Get settings
-        settings = get_settings()
-
-        # Get output location from event
-        output_location = None
-        if isinstance(event.get("body"), dict) and "output_location" in event["body"]:
-            output_location = event["body"]["output_location"]
-
-        if not output_location:
-            # Find latest output path if not specified
-            s3_svc = S3Service(settings)
-            output_location = s3_svc.find_latest_path(
-                base_prefix=f"{settings.s3.prefix}output/", file_pattern="matches"
-            )
-
-        if not output_location:
-            raise ValueError("No output data found")
-
-        # Load records
-        result = load_records(settings, output_location)
-
-        logger.info(
-            {
-                "message": "Data loading completed",
-                "records_loaded": result.records_loaded,
-                "target_table": result.target_table,
-            }
-        )
-
-        return {
-            "statusCode": 200,
-            "body": {
-                "status": "success",
-                "records_loaded": result.records_loaded,
-                "target_table": result.target_table,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-            },
-        }
-    except Exception as e:
-        logger.error(
-            {
-                "message": "Error loading data",
-                "error": str(e),
-            }
-        )
-
-        raise
-
-
-def notify_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    """Send notification about pipeline execution.
-
-    Args:
-        event: Lambda event with notification details
-        context: Lambda context
-
-    Returns:
-        Dictionary with notification results
-    """
-    status = event.get("status", "unknown")
-    message = event.get("message", "Pipeline execution status update")
-    execution_id = event.get("execution", "unknown")
-    error = event.get("error")
-
-    logger.info(
-        {
-            "message": message,
-            "status": status,
-            "execution_id": execution_id,
-            "error": error,
-        }
+    # Load data to Snowflake
+    rows_loaded = snowflake_service.load_data_from_s3(
+        s3_path=s3_path,
+        target_table=target_table,
+        file_format=file_format,
     )
 
-    # Here you would add actual notification logic (SNS, SQS, etc.)
-    # For now, just logging the notification
+    response = {
+        "status": "completed",
+        "rows_loaded": rows_loaded,
+        "target_table": target_table,
+        "s3_path": s3_path,
+    }
+
+    logger.info(f"Snowflake load completed: {rows_loaded} rows loaded to {target_table}")
+    return response
+
+
+@configure_lambda_handler
+def notify_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
+    """Send notification about the Entity Resolution process.
+
+    Args:
+        event: Lambda event containing status and details
+        context: Lambda context
+
+    Returns:
+        Lambda response with notification status
+    """
+    logger.info("Processing notification")
+
+    # Get configuration
+    _config = get_config()
+
+    # Extract parameters
+    status = event.get("status", "completed")
+    details = event.get("details", {})
+
+    # Log the notification
+    logger.info(f"Entity Resolution process {status}: {details}")
+
+    # In a real implementation, this would send an email, SNS notification, etc.
+    # For now, we just log the notification
 
     return {
-        "statusCode": 200,
-        "body": {
-            "message": "Notification sent",
-            "status": status,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        },
+        "status": "completed",
+        "notification_sent": True,
+        "process_status": status,
+        "details": details,
     }

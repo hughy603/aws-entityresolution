@@ -1,0 +1,76 @@
+# AWS Entity Resolution Configuration Example
+# This file demonstrates the structure of the YAML configuration
+# You can use this as a template for your own configuration
+
+# General settings
+environment: dev  # dev, test, staging, prod
+log_level: INFO   # DEBUG, INFO, WARNING, ERROR, CRITICAL
+
+# AWS configuration
+aws:
+  region: us-east-1
+  profile: default
+  # role_arn: optional IAM role ARN for cross-account access
+
+# S3 configuration
+s3:
+  bucket: my-entity-resolution-bucket
+  prefix: entity-resolution/
+  input_prefix: entity-resolution/input/
+  output_prefix: entity-resolution/output/
+  region: us-east-1  # Defaults to aws.region if not specified
+
+# Entity Resolution configuration
+entity_resolution:
+  workflow_id: wr-12345678
+  workflow_name: customer-matching
+  schema_name: customer-schema
+  matching_threshold: 0.85
+  reconciliation_mode: MATCH  # MATCH, NONE, etc.
+  attributes:
+    - name: first_name
+      type: STRING
+      subtype: NAME_FIRST
+      match_key: true
+    - name: last_name
+      type: STRING
+      subtype: NAME_LAST
+      match_key: true
+    - name: email
+      type: STRING
+      subtype: EMAIL
+      match_key: true
+    - name: phone
+      type: STRING
+      subtype: PHONE
+      match_key: false
+    - name: address
+      type: STRING
+      subtype: ADDRESS
+      match_key: false
+
+# Snowflake source configuration (if needed)
+snowflake_source:
+  account: xy12345.us-east-1
+  username: source_user
+  password: source_password  # Use AWS Secrets Manager in production
+  role: ACCOUNTADMIN
+  warehouse: COMPUTE_WH
+  database: SOURCE_DB
+  schema: PUBLIC
+  table: CUSTOMERS_RAW
+
+# Snowflake target configuration
+snowflake_target:
+  account: xy12345.us-east-1
+  username: target_user
+  password: target_password  # Use AWS Secrets Manager in production
+  role: ACCOUNTADMIN
+  warehouse: COMPUTE_WH
+  database: TARGET_DB
+  schema: PUBLIC
+  table: GOLDEN_CUSTOMERS
+
+# Table names
+source_table: CUSTOMERS_RAW
+target_table: GOLDEN_CUSTOMERS

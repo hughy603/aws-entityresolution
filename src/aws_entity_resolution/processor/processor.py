@@ -4,9 +4,11 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional, Union
 
-from src.aws_entity_resolution.config import Settings
-from src.aws_entity_resolution.services import EntityResolutionService, S3Service
-from src.aws_entity_resolution.utils import get_logger, handle_exceptions, log_event
+from aws_entity_resolution.config import Settings
+from aws_entity_resolution.services.entity_resolution import EntityResolutionService
+from aws_entity_resolution.services.s3 import S3Service
+from aws_entity_resolution.utils.error import handle_exceptions
+from aws_entity_resolution.utils.logging import get_logger, log_event
 
 logger = get_logger(__name__)
 
@@ -26,7 +28,7 @@ class ProcessingResult:
     error_message: str = ""
 
     def __init__(
-        self,
+        self: "ProcessingResult",
         status: str,
         job_id: str,
         input_records: int,
@@ -36,8 +38,8 @@ class ProcessingResult:
         success: bool = False,
         output_path: str = "",
         error_message: str = "",
-        **kwargs,  # Accept additional keyword arguments
-    ):
+        **kwargs: dict[str, Any],  # Accept additional keyword arguments
+    ) -> None:
         """Initialize with required fields, ignoring additional kwargs for test compatibility."""
         self.status = status
         self.job_id = job_id
@@ -65,7 +67,9 @@ def find_latest_input_path(s3_service: S3Service) -> Optional[str]:
 
 @handle_exceptions("start_matching_job")
 def start_matching_job(
-    er_service: EntityResolutionService, input_path: str, output_prefix: str
+    er_service: EntityResolutionService,
+    input_path: str,
+    output_prefix: str,
 ) -> str:
     """Start an Entity Resolution matching job.
 
@@ -107,20 +111,44 @@ def wait_for_matching_job(
         status = job_info["status"]
 
         if status == "SUCCEEDED":
-            log_event(
-                logger,
-                "matching_job_success",
-                {
-                    "job_id": job_id,
-                    "output_location": job_info["output_location"],
-                    "statistics": job_info["statistics"],
-                },
-            )
-            return job_info
-        elif status in ["FAILED", "CANCELLED"]:
-            error_message = job_info.get("errors") or "Unknown error"
-            raise RuntimeError(f"Matching job failed: {error_message}")
+            # Get output location from job info
+            output_location = job_info.get("output_location")
 
+            # If output_location is not in job_info, try to extract it from outputSourceConfig
+            if not output_location and "outputSourceConfig" in job_info:
+                output_config = job_info.get("outputSourceConfig", {})
+                s3_config = output_config.get("s3OutputConfig", {})
+                output_location = s3_config.get("key", "")
+
+            log_event(
+                "matching_job_success",
+                job_id=job_id,
+                output_location=output_location,
+                statistics=job_info.get("statistics", {}),
+            )
+
+            # Add output_location to job_info if it's not there
+            if "output_location" not in job_info and output_location:
+                job_info["output_location"] = output_location
+
+            return job_info
+        if status == "FAILED":
+            error_message = job_info.get("errors", ["Unknown error"])[0]
+            log_event(
+                "matching_job_failed",
+                job_id=job_id,
+                error=error_message,
+            )
+            msg = f"Matching job failed: {error_message}"
+            raise RuntimeError(msg)
+        if status == "CANCELLED":
+            log_event(
+                "matching_job_cancelled",
+                job_id=job_id,
+            )
+            msg = "Matching job was cancelled"
+            raise RuntimeError(msg)
+        # Job still running, wait and check again
         time.sleep(check_interval)
 
 
@@ -170,7 +198,8 @@ def process_data(
         # Find latest input file or use provided input URI
         input_file = input_uri if input_uri else find_latest_input_path(s3_service)
         if not input_file:
-            raise ValueError("No input data found")
+            msg = "No input data found"
+            raise ValueError(msg)
 
         # Generate timestamp-based output path or use provided output file
         timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -210,4 +239,4 @@ def process_data(
             output_path=f"s3://{settings.s3.bucket}/{result['output_location']}",
         )
     finally:
-        log_event(logger, "processing_complete", {})
+        log_event("processing_complete")

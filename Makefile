@@ -10,7 +10,6 @@ help:
 	@echo "  make fix-all      Run all fix scripts and linting (comprehensive)"
 	@echo "  make fix-mypy     Run only mypy fixes"
 	@echo "  make fix-ruff     Run only ruff fixes"
-	@echo "  make fix-types    Fix type annotations for compatibility"
 	@echo "  make check        Run pre-commit only on changed files"
 	@echo "  make check-full   Run full pre-commit checks on all files (slow)"
 	@echo "  make test         Run tests without coverage"
@@ -37,7 +36,7 @@ fix:
 	python scripts/fix_all.py
 
 # Run all fix scripts and linting (comprehensive)
-fix-all: fix-types check
+fix-all: check
 
 # Run mypy fixes
 fix-mypy:
@@ -46,11 +45,6 @@ fix-mypy:
 # Run ruff fixes
 fix-ruff:
 	python scripts/fix_ruff.py
-
-# Fix type annotations
-fix-types:
-	python scripts/fix_all_annotations.py
-	python scripts/fix_typer_annotations.py
 
 # Run pre-commit on changed files
 check:

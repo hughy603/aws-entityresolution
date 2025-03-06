@@ -1,16 +1,15 @@
 """Module for loading matched records from S3 to Snowflake."""
 
-import json
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any
 
-import botocore
-import snowflake.connector
-
-from src.aws_entity_resolution.config import Settings
-from src.aws_entity_resolution.services import S3Service, SnowflakeService
-from src.aws_entity_resolution.utils import get_logger, handle_exceptions, log_event
+from aws_entity_resolution.config import Settings
+from aws_entity_resolution.services.s3 import S3Service
+from aws_entity_resolution.services.snowflake import SnowflakeService
+from aws_entity_resolution.utils.error import handle_exceptions
+from aws_entity_resolution.utils.logging import get_logger, log_event
 
 logger = get_logger(__name__)
 
@@ -22,17 +21,17 @@ class LoadingResult:
     status: str
     records_loaded: int
     target_table: str
-    error_message: Optional[str] = None
-    execution_time: Optional[float] = None
+    error_message: str | None = None
+    execution_time: float | None = None
 
     def __init__(
-        self,
+        self: "LoadingResult",
         status: str,
         records_loaded: int,
         target_table: str,
-        error_message: Optional[str] = None,
-        execution_time: Optional[float] = None,
-        **kwargs,  # Accept additional keyword arguments
+        error_message: str | None = None,
+        execution_time: float | None = None,
+        **kwargs: dict[str, Any],  # Accept additional keyword arguments
     ) -> None:
         """Initialize with required fields, ignoring additional kwargs for test compatibility."""
         self.status = status
@@ -42,159 +41,209 @@ class LoadingResult:
         self.execution_time = execution_time
 
 
-@handle_exceptions("create_target_table")
-def create_target_table(snowflake_service: SnowflakeService, settings: Settings) -> None:
-    """Create the target table in Snowflake if it doesn't exist.
+@handle_exceptions("get_table_schema")
+def get_table_schema(settings: Settings) -> list[str]:
+    """Get table schema definition from AWS Entity Resolution service.
+
+    Instead of hardcoding the schema, this function fetches it from AWS.
 
     Args:
-        snowflake_service: SnowflakeService instance
-        settings: Application settings
-    """
-    # Build CREATE TABLE statement with all possible entity attributes
-    # Using a wide table approach for simplicity
-    all_attributes = settings.entity_resolution.entity_attributes
+        settings: Application settings containing AWS config
 
-    # Add additional columns for entity resolution metadata
-    columns = [f'"{attr}" VARCHAR' for attr in all_attributes] + [
-        '"MATCH_ID" VARCHAR',
-        '"CONFIDENCE_SCORE" FLOAT',
-        '"MATCH_TYPE" VARCHAR',
-        '"LOAD_TIMESTAMP" TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()',
+    Returns:
+        List of column definitions for table creation
+    """
+    # Standard columns that are always included
+    columns = [
+        "ID VARCHAR NOT NULL",
+        "MATCH_ID VARCHAR",
+        "MATCH_SCORE FLOAT",
+        "LAST_UPDATED TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()",
+        "PRIMARY KEY (ID)",
     ]
 
-    create_table_sql = f"""
-    CREATE TABLE IF NOT EXISTS
-        "{settings.snowflake_target.database}".
-        "{settings.snowflake_target.schema}".
-        "{settings.target_table}" (
-        {", ".join(columns)}
-    )
+    # Fetch schema information from AWS Entity Resolution
+    # This replaces the hardcoded columns
+    try:
+        import boto3
+
+        client = boto3.client("entityresolution", region_name=settings.aws.region)
+        response = client.get_schema(
+            schemaName=settings.entity_resolution.schema_name,
+        )
+
+        # Add columns from AWS Entity Resolution schema
+        for attribute in response.get("attributes", []):
+            name = attribute.get("name")
+            attr_type = attribute.get("type")
+
+            # Map AWS Entity Resolution types to Snowflake types
+            if (
+                attr_type == "STRING"
+                or attr_type == "EMAIL"
+                or attr_type == "PHONE"
+                or attr_type == "ID"
+            ):
+                sf_type = "VARCHAR"
+            elif attr_type == "NUMBER":
+                sf_type = "FLOAT"
+            elif attr_type == "DATE":
+                sf_type = "TIMESTAMP_NTZ"
+            else:
+                sf_type = "VARCHAR"  # Default type
+
+            # Skip ID as it's already included
+            if name.upper() != "ID":
+                columns.append(f"{name.upper()} {sf_type}")
+
+    except Exception as e:
+        logger.warning(f"Failed to fetch schema from AWS Entity Resolution: {e}")
+        # Fallback to basic columns if AWS schema fetch fails
+        logger.info("Using fallback schema definition for Snowflake table")
+
+    return columns
+
+
+@handle_exceptions("create_target_table")
+def create_target_table(
+    snowflake_service: SnowflakeService, table_name: str, settings: Settings
+) -> None:
+    """Create the target table for entity resolution results.
+
+    Args:
+        snowflake_service: Snowflake service instance
+        table_name: Name of the table to create
+        settings: Application settings
+
+    Raises:
+        RuntimeError: If Snowflake connection is not established
     """
+    if not snowflake_service.connection:
+        msg = "Snowflake connection is not established"
+        raise RuntimeError(msg)
 
-    log_event(
-        logger,
-        "creating_target_table",
-        {
-            "table": settings.target_table,
-            "database": settings.snowflake_target.database,
-            "schema": settings.snowflake_target.schema,
-        },
-    )
+    # Get columns from AWS Entity Resolution schema
+    columns = get_table_schema(settings)
 
-    # Execute the CREATE TABLE statement
-    snowflake_service.execute_query(create_table_sql)
+    # Create the table
+    snowflake_service.create_table(table_name, columns)
+    logger.info("Created target table: %s", table_name)
 
-    log_event(logger, "target_table_created", {"table": settings.target_table})
+
+@handle_exceptions("setup_snowflake_objects")
+def setup_snowflake_objects(snowflake_service: SnowflakeService, settings: Settings) -> None:
+    """Set up required Snowflake objects for loading data.
+
+    Args:
+        snowflake_service: Snowflake service instance
+        settings: Application settings
+    """
+    if not snowflake_service.connection:
+        msg = "Snowflake connection is not established"
+        raise RuntimeError(msg)
+
+    # Read SQL setup script
+    setup_sql_path = Path(__file__).parent / "snowflake_setup.sql"
+    with open(setup_sql_path) as f:
+        setup_sql = f.read()
+
+    # Parameters for SQL
+    params = {
+        "bucket": settings.s3.bucket,
+        "prefix": settings.s3.prefix,
+        "storage_integration_name": getattr(
+            settings.snowflake_target, "storage_integration", "default_integration"
+        ),
+        "target_table": settings.target_table,
+        "target_table_stream": f"{settings.target_table}_stream",
+    }
+
+    # Execute setup statements - replace references with proper bind variables
+    cursor = snowflake_service.connection.cursor()
+    for statement in setup_sql.split(";"):
+        if statement.strip():
+            cursor.execute(statement, params)
+
+    snowflake_service.connection.commit()
+
+    # Create or update the target table
+    create_target_table(snowflake_service, settings.target_table, settings)
 
 
 @handle_exceptions("load_matched_records")
 def load_matched_records(
-    records: list[dict[str, Any]], snowflake_service: SnowflakeService, settings: Settings
+    s3_key: str,
+    snowflake_service: SnowflakeService,
+    settings: Settings,
 ) -> int:
-    """Load matched records into Snowflake.
+    """Load matched records from S3 to Snowflake using MERGE.
 
     Args:
-        records: List of records to load
-        snowflake_service: SnowflakeService instance
+        s3_key: S3 key containing the matched records
+        snowflake_service: Snowflake service instance
         settings: Application settings
 
     Returns:
         Number of records loaded
     """
-    if not records:
-        log_event(logger, "no_records_to_load", {})
-        return 0
+    if not snowflake_service.connection:
+        msg = "Snowflake connection is not established"
+        raise RuntimeError(msg)
 
-    # Get all column names from the records
-    all_columns = set()
-    for record in records:
-        all_columns.update(record.keys())
+    cursor = snowflake_service.connection.cursor()
 
-    # Map AWS Entity Resolution column names to our expected names
-    column_mapping = {
-        "matchid": "MATCH_ID",
-        "matchscore": "MATCH_SCORE",
-    }
-
-    # Normalize column names
-    normalized_columns = {}
-    for col in all_columns:
-        lower_col = col.lower()
-        if lower_col in column_mapping:
-            normalized_columns[lower_col] = column_mapping[lower_col]
-        else:
-            normalized_columns[lower_col] = col
-
-    # Ensure we have all required columns
-    columns_to_use = []
-
-    # First add entity attributes
-    for attr in settings.entity_resolution.entity_attributes:
-        columns_to_use.append(attr)
-
-    # Then add match columns
-    columns_to_use.extend(["MATCH_ID", "MATCH_SCORE"])
-
-    # Prepare the INSERT statement
-    insert_sql = f"""
-    INSERT INTO "{settings.snowflake_target.database}"."{settings.snowflake_target.schema}".\
-"{settings.target_table}"
-    ({", ".join([f'"{col}"' for col in columns_to_use])})
-    VALUES ({", ".join(["%s" for _ in columns_to_use])})
-    """
-
-    log_event(
-        logger, "inserting_records", {"table": settings.target_table, "record_count": len(records)}
+    # Create temporary table
+    temp_table = f"{settings.target_table}_temp"
+    create_temp_sql = "CREATE TEMPORARY TABLE IF NOT EXISTS :temp_table LIKE :target_table"
+    cursor.execute(
+        create_temp_sql,
+        {"temp_table": temp_table, "target_table": settings.target_table},
     )
 
-    # Execute in batches to prevent memory issues with large datasets
-    batch_size = 1000
-    loaded_count = 0
+    # Copy data from S3 to temporary table
+    copy_sql = """
+    COPY INTO :temp_table
+    FROM @entity_resolution_stage/:s3_key
+    FILE_FORMAT = entity_resolution_json_format
+    ON_ERROR = 'ABORT_STATEMENT';
+    """
+    cursor.execute(copy_sql, {"temp_table": temp_table, "s3_key": s3_key})
 
-    for i in range(0, len(records), batch_size):
-        batch = records[i : i + batch_size]
-        values = []
+    # Prepare dynamic MERGE statement based on existing columns
+    desc_sql = "DESC TABLE :table_name"
+    cursor.execute(desc_sql, {"table_name": settings.target_table})
+    columns = [row[0] for row in cursor.fetchall() if row[0] not in ("LAST_UPDATED")]
 
-        for record in batch:
-            row = []
-            for col in columns_to_use:
-                # Try to find the value using case-insensitive matching
-                col_lower = col.lower()
-                value = None
+    # Build dynamic MERGE SQL statement
+    set_clause = ", ".join([f"{col} = source.{col}" for col in columns if col != "ID"])
+    insert_cols = ", ".join([*columns, "LAST_UPDATED"])
+    values_clause = ", ".join([f"source.{col}" for col in columns] + ["CURRENT_TIMESTAMP()"])
 
-                # First check for exact match
-                if col in record:
-                    value = record[col]
-                # Then check for case-insensitive match
-                else:
-                    for k in record:
-                        if k.lower() == col_lower:
-                            value = record[k]
-                            break
+    merge_sql = f"""
+    MERGE INTO {settings.target_table} target
+    USING {temp_table} source
+    ON target.ID = source.ID
+    WHEN MATCHED THEN
+        UPDATE SET {set_clause}, LAST_UPDATED = CURRENT_TIMESTAMP()
+    WHEN NOT MATCHED THEN
+        INSERT ({insert_cols})
+        VALUES ({values_clause});
+    """
 
-                row.append(value)
-            values.append(row)
+    result = cursor.execute(merge_sql)
+    snowflake_service.connection.commit()
 
-        # Execute the batch insert
-        if snowflake_service.connection is None:
-            raise RuntimeError("Snowflake connection is not established")
-        snowflake_service.connection.cursor().executemany(insert_sql, values)
-        snowflake_service.connection.commit()
-        loaded_count += len(batch)
-
-        log_event(
-            logger, "batch_inserted", {"batch_size": len(batch), "total_loaded": loaded_count}
-        )
-
-    return loaded_count
+    # Get number of affected rows
+    stats = result.fetchone()
+    return stats[0] if stats else 0
 
 
 def load_records(
     settings: Settings,
-    s3_key: Optional[str] = None,
+    s3_key: str | None = None,
     dry_run: bool = False,
-    s3_service: Optional[S3Service] = None,
-    snowflake_service: Optional[SnowflakeService] = None,
+    s3_service: S3Service | None = None,
+    snowflake_service: SnowflakeService | None = None,
 ) -> LoadingResult:
     """Load matched records from S3 to Snowflake.
 
@@ -227,7 +276,7 @@ def load_records(
     try:
         # Find the latest output file if no key is provided
         if not s3_key:
-            output_prefix = f"{settings.s3.prefix}output/"
+            output_prefix = f"{settings.s3.prefix}{settings.s3.output_prefix}"
             s3_key = s3_svc.find_latest_path(output_prefix, "results")
 
             if not s3_key:
@@ -238,79 +287,27 @@ def load_records(
                     error_message="No matched records found in S3",
                 )
 
-        # Read the matched records from S3
-        log_event(logger, "reading_matched_records", {"s3_key": s3_key})
+        # Set up Snowflake objects
+        setup_snowflake_objects(sf_svc, settings)
 
-        try:
-            matched_data = s3_svc.read_object(s3_key)
-        except botocore.exceptions.NoCredentialsError:
-            # In tests, we might get this error specifically
-            log_event(logger, "loading_error", {"error": "Unable to locate credentials"})
-            return LoadingResult(
-                status="error",
-                records_loaded=0,
-                target_table=settings.target_table,
-                error_message="Unable to locate credentials",
-            )
+        # Load the records
+        log_event("loading_matched_records", s3_key=s3_key)
+        records_loaded = load_matched_records(s3_key, sf_svc, settings)
 
-        # Parse the matched records (either JSON or NDJSON)
-        try:
-            if not matched_data:
-                log_event(logger, "matched_records_parsed", {"record_count": 0})
-                records = []
-                # For test_load_records_no_data: return success with 0 records
-                return LoadingResult(
-                    status="success",
-                    records_loaded=0,
-                    target_table=settings.target_table,
-                    error_message="No records to load",
-                )
-            elif matched_data.startswith("["):
-                # JSON array format
-                records = json.loads(matched_data)
-            else:
-                # NDJSON format (one JSON per line)
-                records = [json.loads(line) for line in matched_data.splitlines() if line.strip()]
+        return LoadingResult(
+            status="success",
+            records_loaded=records_loaded,
+            target_table=settings.target_table,
+            execution_time=time.time() - start_time,
+        )
 
-            log_event(logger, "matched_records_parsed", {"record_count": len(records)})
-        except json.JSONDecodeError as e:
-            return LoadingResult(
-                status="error",
-                records_loaded=0,
-                target_table=settings.target_table,
-                error_message=f"Failed to parse matched records: {e!s}",
-            )
-
-        # Connect to Snowflake and create table if needed
-        try:
-            with sf_svc:
-                create_target_table(sf_svc, settings)
-                loaded_count = load_matched_records(records, sf_svc, settings)
-
-            log_event(
-                logger,
-                "loading_complete",
-                {"records_loaded": loaded_count, "target_table": settings.target_table},
-            )
-
-            return LoadingResult(
-                status="success", records_loaded=loaded_count, target_table=settings.target_table
-            )
-        except snowflake.connector.errors.ProgrammingError as e:
-            error_message = str(e)
-            log_event(logger, "loading_error", {"error": error_message})
-            return LoadingResult(
-                status="error",
-                records_loaded=0,
-                target_table=settings.target_table,
-                error_message=error_message,
-            )
     except Exception as e:
         error_message = str(e)
-        log_event(logger, "loading_error", {"error": error_message})
+        logger.exception("Error loading records: %s", error_message)
         return LoadingResult(
             status="error",
             records_loaded=0,
             target_table=settings.target_table,
             error_message=error_message,
+            execution_time=time.time() - start_time,
         )

@@ -46,112 +46,135 @@ def aws_credentials():
     os.environ.pop("AWS_REGION", None)
 
 
-# Version-aware fixture implementation
-if USING_MOTO_V5:
+# Use the new mock_aws decorator for all AWS services
+@pytest.fixture
+def aws_mock():
+    """Mock all AWS services."""
+    with mock_aws():
+        yield
 
-    @pytest.fixture
-    def aws_mock():
-        with mock_aws():
-            yield
 
-    @pytest.fixture
-    def s3_client(aws_credentials, aws_mock):
-        return boto3.client("s3", region_name="us-west-2")
-
-    @pytest.fixture
-    def dynamodb_client(aws_credentials, aws_mock):
-        return boto3.client("dynamodb", region_name="us-east-1")
-
-    @pytest.fixture
-    def sqs_client(aws_credentials, aws_mock):
-        return boto3.client("sqs", region_name="us-east-1")
-
-    @pytest.fixture
-    def lambda_client(aws_credentials, aws_mock):
-        return boto3.client("lambda", region_name="us-east-1")
-
-    @pytest.fixture
-    def sns_client(aws_credentials, aws_mock):
-        return boto3.client("sns", region_name="us-east-1")
-
-else:
-    # Fallback to individual service mocks for older moto versions (should not be needed)
-    @pytest.fixture
-    def s3_client(aws_credentials):
-        with mock_aws():
-            yield boto3.client("s3", region_name="us-west-2")
-
-    @pytest.fixture
-    def dynamodb_client(aws_credentials):
-        with mock_aws():
-            yield boto3.client("dynamodb", region_name="us-east-1")
-
-    @pytest.fixture
-    def sqs_client(aws_credentials):
-        with mock_aws():
-            yield boto3.client("sqs", region_name="us-east-1")
-
-    @pytest.fixture
-    def lambda_client(aws_credentials):
-        with mock_aws():
-            yield boto3.client("lambda", region_name="us-east-1")
-
-    @pytest.fixture
-    def sns_client(aws_credentials):
-        with mock_aws():
-            yield boto3.client("sns", region_name="us-east-1")
+# Enhanced AWS Service Fixtures
+@pytest.fixture
+def s3_client(aws_credentials, aws_mock):
+    """Create a mocked S3 client."""
+    return boto3.client("s3", region_name="us-west-2")
 
 
 @pytest.fixture
 def s3_resource(aws_credentials, aws_mock):
+    """Create a mocked S3 resource."""
     return boto3.resource("s3", region_name="us-west-2")
 
 
 @pytest.fixture
+def dynamodb_client(aws_credentials, aws_mock):
+    """Create a mocked DynamoDB client."""
+    return boto3.client("dynamodb", region_name="us-west-2")
+
+
+@pytest.fixture
 def dynamodb_resource(aws_credentials, aws_mock):
-    return boto3.resource("dynamodb", region_name="us-east-1")
+    """Create a mocked DynamoDB resource."""
+    return boto3.resource("dynamodb", region_name="us-west-2")
+
+
+@pytest.fixture
+def sqs_client(aws_credentials, aws_mock):
+    """Create a mocked SQS client."""
+    return boto3.client("sqs", region_name="us-west-2")
 
 
 @pytest.fixture
 def sqs_resource(aws_credentials, aws_mock):
-    return boto3.resource("sqs", region_name="us-east-1")
+    """Create a mocked SQS resource."""
+    return boto3.resource("sqs", region_name="us-west-2")
+
+
+@pytest.fixture
+def lambda_client(aws_credentials, aws_mock):
+    """Create a mocked Lambda client."""
+    return boto3.client("lambda", region_name="us-west-2")
+
+
+@pytest.fixture
+def sns_client(aws_credentials, aws_mock):
+    """Create a mocked SNS client."""
+    return boto3.client("sns", region_name="us-west-2")
 
 
 @pytest.fixture
 def cloudwatch_client(aws_credentials, aws_mock):
-    return boto3.client("cloudwatch", region_name="us-east-1")
+    """Create a mocked CloudWatch client."""
+    return boto3.client("cloudwatch", region_name="us-west-2")
 
 
 @pytest.fixture
 def iam_client(aws_credentials, aws_mock):
-    return boto3.client("iam", region_name="us-east-1")
+    """Create a mocked IAM client."""
+    return boto3.client("iam", region_name="us-west-2")
 
 
 @pytest.fixture
 def sts_client(aws_credentials, aws_mock):
-    return boto3.client("sts", region_name="us-east-1")
+    """Create a mocked STS client."""
+    return boto3.client("sts", region_name="us-west-2")
 
 
 @pytest.fixture
 def ssm_client(aws_credentials, aws_mock):
-    return boto3.client("ssm", region_name="us-east-1")
+    """Create a mocked SSM client."""
+    return boto3.client("ssm", region_name="us-west-2")
 
 
 @pytest.fixture
-def mock_snowflake():
-    """Mock Snowflake connector."""
+def mock_snowflake_cursor():
+    """Create a mock Snowflake cursor."""
+    cursor = MagicMock()
+    cursor.fetchall.return_value = []
+    cursor.description = []
+    return cursor
+
+
+@pytest.fixture
+def mock_snowflake_connection(mock_snowflake_cursor):
+    """Create a mock Snowflake connection."""
+    conn = MagicMock()
+    conn.cursor.return_value = mock_snowflake_cursor
+    return conn
+
+
+@pytest.fixture
+def mock_snowflake(mock_snowflake_connection):
+    """Set up mock for Snowflake connector."""
     with patch("snowflake.connector.connect") as mock_connect:
-        mock_cursor = MagicMock()
-        mock_connection = MagicMock()
-        mock_connection.cursor.return_value = mock_cursor
-        mock_connect.return_value = mock_connection
-        yield mock_connect
+        mock_connect.return_value = mock_snowflake_connection
+        yield {
+            "connect": mock_connect,
+            "connection": mock_snowflake_connection,
+            "cursor": mock_snowflake_connection.cursor(),
+        }
+
+
+@pytest.fixture
+def mock_snowflake_with_data(mock_snowflake):
+    """Set up mock for Snowflake connector with sample data."""
+    cursor = mock_snowflake["cursor"]
+    cursor.fetchall.return_value = [
+        (1, "John Doe", "john@example.com"),
+        (2, "Jane Smith", "jane@example.com"),
+    ]
+    cursor.description = [
+        ("ID", "NUMBER", None, None, None, None, None),
+        ("NAME", "TEXT", None, None, None, None, None),
+        ("EMAIL", "TEXT", None, None, None, None, None),
+    ]
+    return mock_snowflake
 
 
 @pytest.fixture(autouse=True)
 def patch_snowflake_for_all_tests(mock_snowflake):
-    """Automatically patch Snowflake for all tests to prevent real connections."""
-    yield mock_snowflake
+    """Patch Snowflake connector for all tests."""
 
 
 def pytest_configure(config: Config) -> None:
@@ -181,7 +204,6 @@ def pytest_collection_modifyitems(config: Config, items: list[Item]) -> None:
 
         # Mark specific test patterns as slow
         slow_patterns = [
-            "test_extract_data_",  # Snowflake extraction tests
             "test_load_records_",  # Record loading tests
             "test_start_entity_resolution_job",  # AWS Entity Resolution job tests
             "test_wait_for_matching_job_",  # Job waiting tests
@@ -217,7 +239,7 @@ def mock_env_vars() -> Generator[None, None, None]:
             "AWS_ENTITY_RESOLUTION_MATCHING_WORKFLOW_ROLE_ARN": "arn:aws:iam::123456789012:role/test-role",
             "AWS_ENTITY_RESOLUTION_MATCHING_WORKFLOW_BUCKET": "test-bucket",
             "AWS_ENTITY_RESOLUTION_MATCHING_WORKFLOW_PREFIX": "test/prefix/",
-        }
+        },
     )
 
     yield
@@ -228,32 +250,15 @@ def mock_env_vars() -> Generator[None, None, None]:
 
 
 @pytest.fixture
-def s3_mock(aws_credentials):
-    """Create a mock S3 service using moto."""
-    with mock_aws():
-        s3_client = boto3.client("s3", region_name="us-west-2")
-
-        # Create a test bucket
-        bucket_name = "test-bucket"
-        s3_client.create_bucket(
-            Bucket=bucket_name,
-            CreateBucketConfiguration={"LocationConstraint": "us-west-2"},
-        )
-
-        # Add some test objects
-        s3_client.put_object(
-            Bucket=bucket_name,
-            Key="test-prefix/test_data.csv",
-            Body="id,name,email\n1,test,test@example.com",
-        )
-
-        s3_client.put_object(
-            Bucket=bucket_name,
-            Key="test-prefix/matched/matched_data.csv",
-            Body="id,name,email,match_id\n1,test,test@example.com,123",
-        )
-
-        yield s3_client
+def s3_mock(aws_credentials, aws_mock):
+    """Set up an S3 bucket for tests."""
+    s3 = boto3.client("s3", region_name="us-west-2")
+    # Create test bucket
+    s3.create_bucket(
+        Bucket="test-bucket",
+        CreateBucketConfiguration={"LocationConstraint": "us-west-2"},
+    )
+    return s3
 
 
 @pytest.fixture
@@ -302,24 +307,102 @@ def mock_settings():
 
 
 @pytest.fixture
-def mock_entity_resolution_client():
-    """Create a mock for the AWS Entity Resolution client."""
-    with patch("boto3.client") as mock_client:
-        mock_er = MagicMock()
-        mock_client.return_value = mock_er
+def entity_resolution_client(aws_credentials, aws_mock):
+    """Create a mocked Entity Resolution client with better support."""
+    client = boto3.client("entityresolution", region_name="us-west-2")
 
-        # Set up default responses
-        mock_er.start_matching_job.return_value = {"jobId": "test-job-id"}
-        mock_er.get_matching_job.return_value = {
-            "jobId": "test-job-id",
-            "jobStatus": "COMPLETED",
-            "outputSourceConfig": {
-                "s3OutputConfig": {
-                    "key": "test-output/",
-                }
+    # Add custom mocking for entity resolution methods if needed
+    # This overrides moto's limited support for Entity Resolution service
+
+    # Mock schema creation
+    with patch.object(
+        client,
+        "create_schema_mapping",
+        return_value={
+            "schemaArn": "arn:aws:entityresolution:us-west-2:123456789012:schemamapping/test-schema",
+            "createdAt": "2023-01-01T00:00:00Z",
+        },
+    ) as mock_create_schema:
+        # Mock list schemas
+        with patch.object(
+            client,
+            "list_schema_mappings",
+            return_value={
+                "schemaMappings": [
+                    {
+                        "schemaName": "test-schema",
+                        "schemaArn": "arn:aws:entityresolution:us-west-2:123456789012:schemamapping/test-schema",
+                        "createdAt": "2023-01-01T00:00:00Z",
+                    },
+                ],
             },
-            "statistics": {"recordsProcessed": 100, "recordsMatched": 50},
-            "errors": [],
-        }
+        ) as mock_list_schemas:
+            # Mock create matching workflow
+            with patch.object(
+                client,
+                "create_matching_workflow",
+                return_value={
+                    "workflowArn": "arn:aws:entityresolution:us-west-2:123456789012:matchingworkflow/test-workflow",
+                    "createdAt": "2023-01-01T00:00:00Z",
+                },
+            ) as mock_create_workflow:
+                # Mock start matching job
+                with patch.object(
+                    client,
+                    "start_matching_job",
+                    return_value={
+                        "jobId": "test-job-id",
+                        "jobArn": "arn:aws:entityresolution:us-west-2:123456789012:matchingjob/test-job-id",
+                    },
+                ) as mock_start_job:
+                    # Mock get matching job
+                    with patch.object(
+                        client,
+                        "get_matching_job",
+                        return_value={
+                            "jobId": "test-job-id",
+                            "jobStatus": "COMPLETED",
+                            "createdAt": "2023-01-01T00:00:00Z",
+                            "outputSourceConfig": {
+                                "s3OutputConfig": {
+                                    "bucket": "test-bucket",
+                                    "prefix": "output/",
+                                },
+                            },
+                        },
+                    ) as mock_get_job:
+                        yield (
+                            client,
+                            {
+                                "create_schema": mock_create_schema,
+                                "list_schemas": mock_list_schemas,
+                                "create_workflow": mock_create_workflow,
+                                "start_job": mock_start_job,
+                                "get_job": mock_get_job,
+                            },
+                        )
 
-        yield mock_er
+
+@pytest.fixture
+def s3_test_bucket(s3_client):
+    """Create a test S3 bucket using moto."""
+    bucket_name = "test-entity-resolution-bucket"
+    s3_client.create_bucket(
+        Bucket=bucket_name,
+        CreateBucketConfiguration={"LocationConstraint": "us-west-2"},
+    )
+
+    # Create test files
+    s3_client.put_object(
+        Bucket=bucket_name,
+        Key="test-data/sample.csv",
+        Body="id,name,email\n1,Test User,test@example.com",
+    )
+
+    s3_client.put_object(
+        Bucket=bucket_name,
+        Key="config/schema.json",
+        Body='{"schemaName":"test-schema","attributes":[{"attributeName":"id","attributeType":"TEXT"},{"attributeName":"name","attributeType":"TEXT"},{"attributeName":"email","attributeType":"TEXT"}]}',
+    )
+
+    return bucket_name

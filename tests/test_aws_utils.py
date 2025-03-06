@@ -1,18 +1,18 @@
-"""Tests for aws_utils.py module."""
+"""Tests for AWS service classes.
 
-import os
+This file tests the service classes that interact with AWS.
+"""
+
 from unittest.mock import MagicMock, patch
 
 import boto3
 import pytest
 from botocore.exceptions import ClientError
-from src.aws_entity_resolution.aws_utils import (
-    find_latest_s3_path,
-    get_entity_resolution_job_status,
-    list_s3_objects,
-    start_entity_resolution_job,
-)
-from src.aws_entity_resolution.config import Settings
+from moto import mock_aws
+
+from aws_entity_resolution.config import Settings
+from aws_entity_resolution.services.entity_resolution import EntityResolutionService
+from aws_entity_resolution.services.s3 import S3Service
 
 
 @pytest.fixture
@@ -30,50 +30,71 @@ def mock_aws_settings():
 
 
 @pytest.fixture
-def prepare_s3_test_data(s3_mock):
+def prepare_s3_test_data(aws_mock):
     """Create test data in the mocked S3 bucket."""
+    # Using the aws_mock fixture which uses the mock_aws decorator
+    s3 = boto3.client("s3", region_name="us-west-2")
     bucket_name = "test-bucket"
 
+    # Create the bucket
+    s3.create_bucket(
+        Bucket=bucket_name,
+        CreateBucketConfiguration={"LocationConstraint": "us-west-2"},
+    )
+
     # Clear any existing objects
-    objects = s3_mock.list_objects_v2(Bucket=bucket_name).get("Contents", [])
-    if objects:
-        delete_keys = {"Objects": [{"Key": obj["Key"]} for obj in objects]}
-        s3_mock.delete_objects(Bucket=bucket_name, Delete=delete_keys)
+    try:
+        objects = s3.list_objects_v2(Bucket=bucket_name).get("Contents", [])
+        if objects:
+            delete_keys = {"Objects": [{"Key": obj["Key"]} for obj in objects]}
+            s3.delete_objects(Bucket=bucket_name, Delete=delete_keys)
+    except ClientError:
+        # Bucket might not exist yet
+        pass
 
     # Create some test objects with date prefixes
-    s3_mock.put_object(Bucket=bucket_name, Key="test-prefix/2023-01-01/file1.csv", Body="test data")
-    s3_mock.put_object(
-        Bucket=bucket_name, Key="test-prefix/2023-01-01/file2.json", Body="test data"
+    s3.put_object(Bucket=bucket_name, Key="test-prefix/2023-01-01/file1.csv", Body="test data")
+    s3.put_object(
+        Bucket=bucket_name,
+        Key="test-prefix/2023-01-01/file2.json",
+        Body="test data",
     )
-    s3_mock.put_object(Bucket=bucket_name, Key="test-prefix/2023-02-01/file1.csv", Body="test data")
-    s3_mock.put_object(
-        Bucket=bucket_name, Key="test-prefix/2023-02-01/file2.json", Body="test data"
+    s3.put_object(Bucket=bucket_name, Key="test-prefix/2023-02-01/file1.csv", Body="test data")
+    s3.put_object(
+        Bucket=bucket_name,
+        Key="test-prefix/2023-02-01/file2.json",
+        Body="test data",
     )
 
     return bucket_name
 
 
-def test_list_s3_objects(prepare_s3_test_data, s3_mock):
-    """Test listing S3 objects."""
-    result = list_s3_objects("test-bucket", "test-prefix/", "us-west-2")
+# The aws_mock fixture is automatically used here through prepare_s3_test_data
+def test_s3service_list_objects(prepare_s3_test_data, mock_aws_settings):
+    """Test listing S3 objects using S3Service directly."""
+    # Also patch the log_event function to prevent errors
+    with patch("aws_entity_resolution.services.s3.log_event"):
+        s3_service = S3Service(mock_aws_settings)
 
-    # Should return prefixes for the two date directories
-    assert len(result["prefixes"]) == 2
-    assert "test-prefix/2023-01-01/" in result["prefixes"]
-    assert "test-prefix/2023-02-01/" in result["prefixes"]
+        result = s3_service.list_objects("test-prefix/")
 
-    # The current implementation doesn't include the prefix itself in the files list
-    assert len(result["files"]) == 0
+        # Should return prefixes for the two date directories
+        assert len(result["prefixes"]) == 2
+        assert "test-prefix/2023-01-01/" in result["prefixes"]
+        assert "test-prefix/2023-02-01/" in result["prefixes"]
 
-    # Test with a specific prefix
-    result = list_s3_objects("test-bucket", "test-prefix/2023-01-01/", "us-west-2", delimiter="")
-    assert len(result["files"]) == 2
-    assert "test-prefix/2023-01-01/file1.csv" in result["files"]
-    assert "test-prefix/2023-01-01/file2.json" in result["files"]
+        # The current implementation doesn't include the prefix itself in the files list
+        assert len(result["files"]) == 0
+
+        # Test with a specific prefix
+        result = s3_service.list_objects("test-prefix/2023-01-01/", delimiter="")
+        assert len(result["files"]) == 2
+        assert "test-prefix/2023-01-01/file1.csv" in result["files"]
+        assert "test-prefix/2023-01-01/file2.json" in result["files"]
 
 
-def test_list_s3_objects_error():
-    """Test error handling when listing S3 objects."""
+def test_s3service_list_objects_error(mock_aws_settings):
+    """Test error handling when listing S3 objects with S3Service directly."""
     with patch("boto3.client") as mock_client:
         mock_s3 = MagicMock()
         mock_client.return_value = mock_s3
@@ -82,99 +103,139 @@ def test_list_s3_objects_error():
             "ListObjectsV2",
         )
 
+        s3_service = S3Service(mock_aws_settings)
+
         # The handle_exceptions decorator logs the error but still raises it
         with pytest.raises(ClientError):
-            list_s3_objects("non-existent-bucket", "prefix/", "us-west-2")
+            s3_service.list_objects("prefix/")
 
 
-def test_find_latest_s3_path(prepare_s3_test_data, mock_aws_settings):
-    """Test finding the latest S3 path."""
-    # The latest directory is 2023-02-01
-    result = find_latest_s3_path(mock_aws_settings, file_pattern=".json")
-    assert result == "test-prefix/2023-02-01/file2.json"
+def test_s3service_find_latest_path(prepare_s3_test_data, mock_aws_settings):
+    """Test finding the latest S3 path with S3Service directly."""
+    # Also patch the log_event function to prevent errors
+    with patch("aws_entity_resolution.services.s3.log_event"):
+        s3_service = S3Service(mock_aws_settings)
 
-    # Test with a different file pattern
-    result = find_latest_s3_path(mock_aws_settings, file_pattern=".csv")
-    assert result == "test-prefix/2023-02-01/file1.csv"
+        # The latest directory is 2023-02-01
+        result = s3_service.find_latest_path(mock_aws_settings.s3.prefix, file_pattern=".json")
+        assert result == "test-prefix/2023-02-01/file2.json"
+
+        # Test with a different file pattern
+        result = s3_service.find_latest_path(mock_aws_settings.s3.prefix, file_pattern=".csv")
+        assert result == "test-prefix/2023-02-01/file1.csv"
 
 
-def test_find_latest_s3_path_no_prefixes(mock_aws_settings):
-    """Test finding the latest S3 path when no prefixes exist."""
-    with patch("src.aws_entity_resolution.aws_utils.list_s3_objects") as mock_list:
+def test_s3service_find_latest_path_no_prefixes(mock_aws_settings):
+    """Test finding the latest S3 path when no prefixes exist with S3Service directly."""
+    with patch("aws_entity_resolution.services.s3.S3Service.list_objects") as mock_list:
         mock_list.return_value = {"prefixes": [], "files": []}
-        result = find_latest_s3_path(mock_aws_settings)
+
+        s3_service = S3Service(mock_aws_settings)
+        result = s3_service.find_latest_path()
         assert result is None
 
 
-def test_find_latest_s3_path_no_matching_files(mock_aws_settings):
-    """Test finding the latest S3 path when no matching files exist."""
-    with patch("src.aws_entity_resolution.aws_utils.list_s3_objects") as mock_list:
-        # First call returns prefixes
+def test_s3service_find_latest_path_no_matching_files(mock_aws_settings):
+    """Test finding the latest S3 path when no matching files exist with S3Service directly."""
+    with (
+        patch("aws_entity_resolution.services.s3.S3Service.list_objects") as mock_list,
+        patch("aws_entity_resolution.services.s3.log_event"),
+    ):
+        # First call returns prefixes, second call returns files
         mock_list.side_effect = [
             {"prefixes": ["test-prefix/2023-02-01/"], "files": []},
             {"prefixes": [], "files": ["test-prefix/2023-02-01/file1.txt"]},
         ]
 
+        s3_service = S3Service(mock_aws_settings)
         # No .json files in the latest directory
-        result = find_latest_s3_path(mock_aws_settings, file_pattern=".json")
+        result = s3_service.find_latest_path(file_pattern=".json")
         assert result is None
 
 
-def test_start_entity_resolution_job(mock_aws_settings, mock_entity_resolution_client):
-    """Test starting an Entity Resolution job."""
-    job_id = start_entity_resolution_job(mock_aws_settings, "test-input.csv", "test-output/")
+def test_entityresolutionservice_start_matching_job(
+    mock_aws_settings,
+    mock_entity_resolution_client,
+):
+    """Test starting an Entity Resolution job with EntityResolutionService directly."""
+    # Also patch the log_event function
+    with patch("aws_entity_resolution.services.entity_resolution.log_event"):
+        er_service = EntityResolutionService(mock_aws_settings)
+        job_id = er_service.start_matching_job("test-input.csv", "test-output/")
 
-    assert job_id == "test-job-id"
-    mock_entity_resolution_client.start_matching_job.assert_called_once_with(
-        workflowName="test-workflow",
-        inputSourceConfig={"s3SourceConfig": {"bucket": "test-bucket", "key": "test-input.csv"}},
-        outputSourceConfig={
-            "s3OutputConfig": {
-                "bucket": "test-bucket",
-                "key": "test-output/",
-                "applyNormalization": True,
-            }
-        },
-    )
+        assert job_id == "test-job-id"
+        mock_entity_resolution_client.start_matching_job.assert_called_once_with(
+            workflowName="test-workflow",
+            inputSourceConfig={"s3SourceConfig": {"source": "test-input.csv"}},
+            outputSourceConfig={
+                "s3OutputConfig": {
+                    "destination": "test-output/",
+                },
+            },
+        )
 
 
-def test_start_entity_resolution_job_error(mock_aws_settings):
-    """Test error handling when starting an Entity Resolution job."""
-    # We need to patch the boto3 client directly for the error test
-    with patch("boto3.client") as mock_client:
+def test_entityresolutionservice_start_matching_job_error(mock_aws_settings):
+    """Test error handling when starting an Entity Resolution job with EntityResolutionService directly."""
+    with (
+        patch("boto3.client") as mock_client,
+        patch("aws_entity_resolution.services.entity_resolution.log_event"),
+    ):
         mock_er = MagicMock()
         mock_client.return_value = mock_er
         mock_er.start_matching_job.side_effect = ClientError(
-            {"Error": {"Code": "ValidationException", "Message": "Invalid workflow name"}},
+            {
+                "Error": {
+                    "Code": "ValidationException",
+                    "Message": "Workflow not found",
+                },
+            },
             "StartMatchingJob",
         )
 
-        # Should raise the exception which is caught by the handle_exceptions decorator
+        er_service = EntityResolutionService(mock_aws_settings)
+
+        # The handle_exceptions decorator logs the error but still raises it
         with pytest.raises(ClientError):
-            start_entity_resolution_job(mock_aws_settings, "test-input.csv", "test-output/")
+            er_service.start_matching_job("test-input.csv", "test-output/")
 
 
-def test_get_entity_resolution_job_status(mock_aws_settings, mock_entity_resolution_client):
-    """Test getting Entity Resolution job status."""
-    status = get_entity_resolution_job_status(mock_aws_settings, "test-job-id")
+def test_entityresolutionservice_get_job_status(mock_aws_settings, mock_entity_resolution_client):
+    """Test getting Entity Resolution job status with EntityResolutionService directly."""
+    with patch("aws_entity_resolution.services.entity_resolution.log_event"):
+        er_service = EntityResolutionService(mock_aws_settings)
+        status = er_service.get_job_status("test-job-id")
 
-    assert status["status"] == "COMPLETED"
-    assert status["output_location"] == "test-output/"
-    assert status["statistics"] == {"recordsProcessed": 100, "recordsMatched": 50}
-    assert status["errors"] == []
+        assert status["status"] == "COMPLETED"
+        # Check the output location from the outputSourceConfig
+        assert "outputSourceConfig" in status
+        assert "s3OutputConfig" in status["outputSourceConfig"]
+        assert status["outputSourceConfig"]["s3OutputConfig"]["key"] == "test-output/"
+        assert status["statistics"] == {"recordsProcessed": 100, "recordsMatched": 50}
+        assert status["errors"] == []
+        mock_entity_resolution_client.get_matching_job.assert_called_once_with(jobId="test-job-id")
 
 
-def test_get_entity_resolution_job_status_error(mock_aws_settings):
-    """Test error handling when getting Entity Resolution job status."""
-    # We need to patch the boto3 client directly for the error test
-    with patch("boto3.client") as mock_client:
+def test_entityresolutionservice_get_job_status_error(mock_aws_settings):
+    """Test error handling when getting Entity Resolution job status with EntityResolutionService directly."""
+    with (
+        patch("boto3.client") as mock_client,
+        patch("aws_entity_resolution.services.entity_resolution.log_event"),
+    ):
         mock_er = MagicMock()
         mock_client.return_value = mock_er
         mock_er.get_matching_job.side_effect = ClientError(
-            {"Error": {"Code": "ResourceNotFoundException", "Message": "Job not found"}},
+            {
+                "Error": {
+                    "Code": "ResourceNotFoundException",
+                    "Message": "Job not found",
+                },
+            },
             "GetMatchingJob",
         )
 
-        # Should raise the exception which is caught by the handle_exceptions decorator
+        er_service = EntityResolutionService(mock_aws_settings)
+
+        # The handle_exceptions decorator logs the error but still raises it
         with pytest.raises(ClientError):
-            get_entity_resolution_job_status(mock_aws_settings, "non-existent-job")
+            er_service.get_job_status("non-existent-job-id")

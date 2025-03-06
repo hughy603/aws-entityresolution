@@ -29,35 +29,31 @@ from aws_entity_resolution.loader.loader import (
     create_target_table,
     load_matched_records,
     load_records,
+    setup_snowflake_objects,
 )
-from aws_entity_resolution.services import S3Service, SnowflakeService
+from aws_entity_resolution.services.s3 import S3Service
+from aws_entity_resolution.services.snowflake import SnowflakeService
 
 
 @pytest.fixture
 def mock_settings() -> Settings:
     """Create mock settings for testing."""
-    return Settings(
-        aws_region="us-west-2",
-        s3=S3Config(bucket="test-bucket", prefix="test-prefix/"),
-        snowflake=SnowflakeConfig(
-            account="test-account",
-            username="test-user",
-            password="test-password",
-            role="test-role",
-            warehouse="test-warehouse",
-            source_database="test-source-db",
-            source_schema="test-source-schema",
-            source_table="test-source-table",
-            target_database="test-target-db",
-            target_schema="test-target-schema",
-            target_table="test_target_table",
-        ),
-        entity_resolution=EntityResolutionConfig(
-            workflow_name="test-workflow",
-            schema_name="test-schema",
-            entity_attributes=["id", "name", "email"],
-        ),
-    )
+    settings = MagicMock(spec=Settings)
+    settings.target_table = "test_target"
+    settings.aws_region = "us-east-1"
+
+    # Mock S3 config
+    s3_config = MagicMock()
+    s3_config.bucket = "test-bucket"
+    s3_config.prefix = "test-prefix/"
+    settings.s3 = s3_config
+
+    # Mock Snowflake target config
+    snowflake_config = MagicMock()
+    snowflake_config.storage_integration = "test_integration"
+    settings.snowflake_target = snowflake_config
+
+    return settings
 
 
 @pytest.fixture
@@ -82,15 +78,28 @@ def mock_matched_records() -> list[dict[str, Any]]:
 
 
 @pytest.fixture
-def mock_snowflake_service(mock_settings: Settings) -> SnowflakeService:
-    """Create a mock SnowflakeService."""
-    with patch.object(SnowflakeService, "connect"):
-        service = SnowflakeService(mock_settings, use_target=True)
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_conn.cursor.return_value = mock_cursor
-        service.connection = mock_conn
-        return service
+def mock_snowflake_cursor():
+    """Create a mock Snowflake cursor."""
+    cursor = MagicMock()
+    cursor.execute.return_value = MagicMock()
+    cursor.execute.return_value.fetchone.return_value = [10]  # Mock 10 records affected
+    return cursor
+
+
+@pytest.fixture
+def mock_snowflake_connection(mock_snowflake_cursor):
+    """Create a mock Snowflake connection."""
+    conn = MagicMock()
+    conn.cursor.return_value = mock_snowflake_cursor
+    return conn
+
+
+@pytest.fixture
+def mock_snowflake_service(mock_snowflake_connection):
+    """Create a mock Snowflake service."""
+    service = MagicMock(spec=SnowflakeService)
+    service.connection = mock_snowflake_connection
+    return service
 
 
 @pytest.fixture
@@ -121,16 +130,17 @@ def test_create_target_table_success(
     with (
         patch("snowflake.connector.connect"),
         patch.object(mock_snowflake_service, "connect") as mock_connect,
-        patch.object(mock_snowflake_service, "execute_query") as mock_execute,
+        patch.object(mock_snowflake_service, "create_table") as mock_create_table,
     ):
         # Set up the mock connection
         mock_connect.return_value = MagicMock()
+        mock_snowflake_service.connection = MagicMock()
 
         # Call the function
-        create_target_table(mock_snowflake_service, mock_settings)
+        create_target_table(mock_snowflake_service, mock_settings.target_table)
 
-        # Verify the execute_query was called
-        mock_execute.assert_called_once()
+        # Verify the create_table was called
+        mock_create_table.assert_called_once()
 
 
 def test_create_target_table_error(
@@ -141,125 +151,152 @@ def test_create_target_table_error(
     with (
         patch("snowflake.connector.connect") as mock_connect,
         patch.object(mock_snowflake_service, "connect") as mock_service_connect,
-        patch.object(mock_snowflake_service, "execute_query") as mock_execute,
+        patch.object(mock_snowflake_service, "create_table") as mock_create_table,
     ):
         # Set up the mock connection
         mock_connect.return_value = MagicMock()
         mock_service_connect.return_value = MagicMock()
+        mock_snowflake_service.connection = MagicMock()
 
-        # Make the execute_query method raise an error
-        mock_execute.side_effect = snowflake.connector.errors.ProgrammingError(
+        # Make the create_table method raise an error
+        mock_create_table.side_effect = snowflake.connector.errors.ProgrammingError(
             "Table creation failed"
         )
 
         with pytest.raises(snowflake.connector.errors.ProgrammingError) as exc_info:
-            create_target_table(mock_snowflake_service, mock_settings)
+            create_target_table(mock_snowflake_service, mock_settings.target_table)
 
         assert "Table creation failed" in str(exc_info.value)
 
 
-def test_load_matched_records_success(
-    mock_snowflake_service: SnowflakeService,
-    mock_settings: Settings,
-    mock_matched_records: list[dict[str, Any]],
-) -> None:
-    """Test successful loading of matched records to Snowflake."""
-    result = load_matched_records(mock_matched_records, mock_snowflake_service, mock_settings)
+def test_setup_snowflake_objects(mock_snowflake_service, mock_settings, tmp_path):
+    """Test setting up Snowflake objects."""
+    # Create a temporary setup.sql file
+    setup_sql = """
+    CREATE OR REPLACE FILE FORMAT test_format
+        TYPE = 'JSON';
+    """
+    sql_path = tmp_path / "snowflake_setup.sql"
+    sql_path.write_text(setup_sql)
 
-    assert result == 2
+    with patch("pathlib.Path.open", create=True) as mock_open:
+        mock_open.return_value.__enter__.return_value.read.return_value = setup_sql
 
-    # Verify records were inserted correctly
-    mock_cursor = mock_snowflake_service.connection.cursor.return_value
-    insert_sql = mock_cursor.executemany.call_args[0][0]
-    assert "INSERT INTO" in insert_sql
-    assert all(attr in insert_sql for attr in ["id", "name", "email", "MATCH_ID", "MATCH_SCORE"])
+        setup_snowflake_objects(mock_snowflake_service, mock_settings)
 
-    mock_snowflake_service.connection.commit.assert_called_once()
-
-
-def test_load_records_success(
-    mock_settings: Settings,
-    mock_matched_records: list[dict[str, Any]],
-    mock_s3_service: S3Service,
-    mock_snowflake_service: SnowflakeService,
-) -> None:
-    """Test successful record loading."""
-    # Ensure S3 service returns valid data
-    with patch.object(mock_s3_service, "read_object") as mock_read:
-        mock_read.return_value = "\n".join([json.dumps(record) for record in mock_matched_records])
-
-        # Mock the SnowflakeService to avoid actual connections
-        with patch("aws_entity_resolution.loader.loader.SnowflakeService") as mock_sf_service_class:
-            mock_sf_service_class.return_value.__enter__.return_value = mock_snowflake_service
-            mock_sf_service_class.return_value.__exit__.return_value = None
-
-            # Mock the create_target_table and load_matched_records functions
-            with patch(
-                "aws_entity_resolution.loader.loader.create_target_table"
-            ) as mock_create_table:
-                with patch("aws_entity_resolution.loader.loader.load_matched_records") as mock_load:
-                    mock_load.return_value = 2  # Return 2 records loaded
-
-                    result = load_records(
-                        mock_settings,
-                        "test-key",
-                        s3_service=mock_s3_service,
-                    )
-
-                    # Verify the mocks were called
-                    mock_create_table.assert_called_once()
-                    mock_load.assert_called_once()
-
-                    assert isinstance(result, LoadingResult)
-                    assert result.status == "success"
-                    assert result.records_loaded == 2
-                    assert result.target_table == mock_settings.target_table
+        # Verify SQL execution
+        cursor = mock_snowflake_service.connection.cursor()
+        cursor.execute.assert_called()
+        mock_snowflake_service.connection.commit.assert_called_once()
 
 
-def test_load_records_no_data(mock_settings: Settings) -> None:
-    """Test loading when no records are available."""
-    with patch.object(S3Service, "read_object") as mock_read:
-        mock_read.return_value = ""
-        s3_service = S3Service(mock_settings)
+def test_load_matched_records_success(mock_snowflake_service, mock_settings):
+    """Test successful loading of matched records."""
+    s3_key = "test/output.json"
 
-        result = load_records(mock_settings, "test-key", s3_service=s3_service)
+    result = load_matched_records(s3_key, mock_snowflake_service, mock_settings)
 
-        assert isinstance(result, LoadingResult)
-        assert result.status == "success"
+    # Verify SQL execution
+    cursor = mock_snowflake_service.connection.cursor()
+
+    # Check temp table creation - using parameterized query
+    cursor.execute.assert_any_call(
+        "CREATE TEMPORARY TABLE :temp_table LIKE :target_table",
+        {"temp_table": "test_target_temp", "target_table": "test_target"},
+    )
+
+    # Check COPY command
+    copy_call = any(
+        "COPY INTO" in str(call) and "test_target_temp" in str(call)
+        for call in cursor.execute.call_args_list
+    )
+    assert copy_call
+
+    # Check MERGE command
+    merge_call = any(
+        "MERGE INTO" in str(call) and ":target_table" in str(call) and ":temp_table" in str(call)
+        for call in cursor.execute.call_args_list
+    )
+    assert merge_call
+
+    # Verify commit
+    mock_snowflake_service.connection.commit.assert_called()
+
+    # Check result
+    assert result == 10  # From mock cursor fixture
+
+
+def test_load_records_success(mock_settings, mock_snowflake_service):
+    """Test successful record loading workflow."""
+    s3_key = "test/output.json"
+
+    with patch("aws_entity_resolution.loader.loader.setup_snowflake_objects") as mock_setup:
+        with patch("aws_entity_resolution.loader.loader.load_matched_records") as mock_load:
+            mock_load.return_value = 10
+
+            result = load_records(
+                mock_settings,
+                s3_key,
+                snowflake_service=mock_snowflake_service,
+            )
+
+            # Verify setup was called
+            mock_setup.assert_called_once_with(mock_snowflake_service, mock_settings)
+
+            # Verify load was called
+            mock_load.assert_called_once_with(s3_key, mock_snowflake_service, mock_settings)
+
+            # Check result
+            assert isinstance(result, LoadingResult)
+            assert result.status == "success"
+            assert result.records_loaded == 10
+            assert result.target_table == mock_settings.target_table
+            assert result.execution_time is not None
+
+
+def test_load_records_no_key_found(mock_settings, mock_snowflake_service):
+    """Test loading when no S3 key is found."""
+    with patch("aws_entity_resolution.services.s3.S3Service.find_latest_path") as mock_find:
+        mock_find.return_value = None
+
+        result = load_records(
+            mock_settings,
+            snowflake_service=mock_snowflake_service,
+        )
+
+        assert result.status == "error"
+        assert "No matched records found" in result.error_message
         assert result.records_loaded == 0
-        assert "No records to load" in result.error_message
 
 
-def test_load_records_error(
-    mock_settings: Settings,
-    mock_matched_records: list[dict[str, Any]],
-    mock_s3_service: S3Service,
-    mock_snowflake_service: SnowflakeService,
-) -> None:
-    """Test error during record loading."""
-    # Ensure S3 service returns valid data instead of raising NoCredentialsError
-    with patch.object(
-        mock_s3_service, "read_object", return_value=json.dumps(mock_matched_records)
-    ):
-        # Mock Snowflake connection to avoid connection errors
-        with patch.object(SnowflakeService, "__enter__", return_value=mock_snowflake_service):
-            with patch.object(SnowflakeService, "__exit__", return_value=None):
-                with patch(
-                    "aws_entity_resolution.loader.loader.create_target_table", return_value=None
-                ):
-                    # Configure the mock to raise an Error exception when load_matched_records is called
-                    with patch(
-                        "aws_entity_resolution.loader.loader.load_matched_records"
-                    ) as mock_load:
-                        mock_load.side_effect = snowflake.connector.errors.Error("Insert failed")
+def test_load_records_error(mock_settings, mock_snowflake_service):
+    """Test loading when an error occurs."""
+    s3_key = "test/output.json"
 
-                        # The function should handle the exception and return an error status
-                        result = load_records(
-                            mock_settings,
-                            "test-key",
-                            s3_service=mock_s3_service,
-                            snowflake_service=mock_snowflake_service,
-                        )
+    with patch("aws_entity_resolution.loader.loader.setup_snowflake_objects") as mock_setup:
+        mock_setup.side_effect = Exception("Test error")
 
-                        assert result.status == "error"
-                        assert "Insert failed" in result.error_message
+        result = load_records(
+            mock_settings,
+            s3_key,
+            snowflake_service=mock_snowflake_service,
+        )
+
+        assert result.status == "error"
+        assert "Test error" in result.error_message
+        assert result.records_loaded == 0
+        assert result.execution_time is not None
+
+
+def test_load_records_dry_run(mock_settings, mock_snowflake_service):
+    """Test dry run mode."""
+    result = load_records(
+        mock_settings,
+        "test/output.json",
+        dry_run=True,
+        snowflake_service=mock_snowflake_service,
+    )
+
+    assert result.status == "dry_run"
+    assert result.records_loaded == 0
+    assert result.execution_time is not None

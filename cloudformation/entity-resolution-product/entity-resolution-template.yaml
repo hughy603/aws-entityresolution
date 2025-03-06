@@ -497,24 +497,38 @@ Outputs:
 
   S3BucketName:
     Description: S3 Bucket Name for Entity Resolution Data
-    Value: !Ref EntityResolutionBucket
-
-  MatchingWorkflowArn:
-    Description: Matching Workflow ARN
     Value: !If
-      - UseRuleMatching
-      - !Ref EntityResolutionRuleMatchingWorkflow
-      - !If
-        - UseMLMatching
-        - !Ref EntityResolutionMLMatchingWorkflow
-        - !If
-          - UseProviderMatching
-          - !Ref EntityResolutionProviderService
-          - "No workflow created"
+      - UseExistingBucket
+      - !Ref ExistingS3BucketName
+      - !Ref EntityResolutionBucket
+
+  SchemaName:
+    Description: Name of the Entity Resolution Schema
+    Value: !Ref SchemaName
+
+  WorkflowName:
+    Description: Name of the Entity Resolution Matching Workflow
+    Value: !Ref MatchingWorkflowName
+
+  SourceTable:
+    Description: Name of the source table
+    Value: !Sub "${AWS::StackName}-source"
+
+  TargetTable:
+    Description: Name of the target table
+    Value: !Sub "${AWS::StackName}-target"
+
+  JobName:
+    Description: Name of the Entity Resolution job
+    Value: !Sub "${AWS::StackName}-job"
 
   SchemaArn:
-    Description: Schema ARN
-    Value: !Ref EntityResolutionSchema
+    Description: ARN of the Entity Resolution Schema
+    Value: !GetAtt EntitySchema.SchemaArn
+
+  WorkflowArn:
+    Description: ARN of the Entity Resolution Matching Workflow
+    Value: !GetAtt MatchingWorkflow.WorkflowArn
 
   MonitoringDashboard:
     Condition: EnableMonitoring

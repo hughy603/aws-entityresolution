@@ -48,17 +48,29 @@ The project includes several scripts to automatically fix common issues:
 ## Configuration Files
 
 - `.pre-commit-config.yaml`: Pre-commit hook configuration
-- `pyproject.toml`: Ruff and other tool configurations
+- `pyproject.toml`: Ruff and other tool configurations (consolidated)
 - `.mypy.ini`: Type checking configuration
 - `Makefile`: Simplified commands for running linting
 
 ## Configured Tools
 
-- **Ruff**: Fast Python linter, replaces multiple tools (flake8, isort, etc.)
+- **Ruff**: Fast Python linter that replaces multiple tools (flake8, isort, pylint, etc.)
 - **mypy**: Static type checking
-- **Black**: Code formatting (via Ruff)
 - **pre-commit**: Git hook management
 - **Custom Fix Scripts**: Automate fixes for common issues
+
+## Linting Consolidation
+
+The project has moved all linting rules to Ruff, which provides several advantages:
+
+1. **Single Configuration**: All linting settings are now in `pyproject.toml`
+2. **Faster Execution**: Ruff is significantly faster than traditional linters
+3. **Comprehensive Rules**: Ruff incorporates rules from multiple linters including:
+   - flake8 and its plugins
+   - isort (import sorting)
+   - pylint (code analysis)
+   - black (formatting)
+   - pyupgrade (modern Python syntax)
 
 ## Excluded Files and Directories
 

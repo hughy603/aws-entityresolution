@@ -1,8 +1,7 @@
 """Tests for the AWS Entity Resolution processing module."""
 
-from datetime import datetime
-from typing import Any, Dict, Optional
-from unittest.mock import MagicMock, Mock, patch
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 import boto3
 import pytest
@@ -18,14 +17,17 @@ from aws_entity_resolution.processor.processor import (
     process_data,
     wait_for_matching_job,
 )
-from aws_entity_resolution.services import EntityResolutionService, S3Service
+from aws_entity_resolution.services.entity_resolution import EntityResolutionService
+from aws_entity_resolution.services.s3 import S3Service
 
 
 @pytest.fixture
 def mock_settings() -> Settings:
     """Create mock settings for testing."""
     settings = Settings(
-        aws_region="us-east-1", source_table="test_source", target_table="test_target"
+        aws_region="us-east-1",
+        source_table="test_source",
+        target_table="test_target",
     )
 
     # Set up S3 config
@@ -80,7 +82,8 @@ def mock_matching_job_response() -> dict[str, Any]:
 
 
 def test_s3_service_find_latest_path_success(
-    mock_settings: Settings, mock_s3_list_response: dict[str, Any]
+    mock_settings: Settings,
+    mock_s3_list_response: dict[str, Any],
 ) -> None:
     """Test successful finding of latest input path."""
     with patch("boto3.client") as mock_boto3:
@@ -112,7 +115,7 @@ def test_s3_service_find_latest_path_s3_error(mock_settings: Settings) -> None:
     """Test S3 error handling when finding latest input path."""
     with (
         patch("boto3.client") as mock_boto3,
-        patch("src.aws_entity_resolution.utils.handle_exceptions", lambda x: lambda f: f),
+        patch("aws_entity_resolution.utils.handle_exceptions", lambda x: lambda f: f),
     ):
         mock_s3 = MagicMock()
         mock_boto3.return_value = mock_s3
@@ -129,7 +132,8 @@ def test_s3_service_find_latest_path_s3_error(mock_settings: Settings) -> None:
 
 
 def test_start_matching_job_success(
-    mock_settings: Settings, mock_matching_job_response: dict[str, Any]
+    mock_settings: Settings,
+    mock_matching_job_response: dict[str, Any],
 ) -> None:
     """Test successful starting of matching job."""
     with patch("boto3.client") as mock_boto3:
@@ -148,7 +152,7 @@ def test_start_matching_job_error(mock_settings: Settings) -> None:
     """Test error handling when starting matching job."""
     with (
         patch("boto3.client") as mock_boto3,
-        patch("src.aws_entity_resolution.utils.handle_exceptions", lambda x: lambda f: f),
+        patch("aws_entity_resolution.utils.handle_exceptions", lambda x: lambda f: f),
     ):
         mock_er = MagicMock()
         mock_boto3.return_value = mock_er
@@ -165,7 +169,8 @@ def test_start_matching_job_error(mock_settings: Settings) -> None:
 
 
 def test_wait_for_matching_job_success(
-    mock_settings: Settings, mock_matching_job_response: dict[str, Any]
+    mock_settings: Settings,
+    mock_matching_job_response: dict[str, Any],
 ) -> None:
     """Test successful waiting for matching job."""
     # Use EntityResolutionService directly instead of Settings
@@ -263,7 +268,8 @@ def test_process_data_no_input(mock_settings: Settings) -> None:
 
 
 def test_process_data_matching_error(
-    mock_settings: Settings, mock_s3_list_response: dict[str, Any]
+    mock_settings: Settings,
+    mock_s3_list_response: dict[str, Any],
 ) -> None:
     """Test processing with matching job error."""
     # Use mock_aws instead of mock_s3
@@ -301,7 +307,7 @@ def test_process_data_matching_error(
 
         # We need to patch at a lower level to avoid the actual API call
         with patch(
-            "src.aws_entity_resolution.services.EntityResolutionService.start_matching_job"
+            "aws_entity_resolution.services.EntityResolutionService.start_matching_job",
         ) as mock_start_job:
             mock_start_job.side_effect = RuntimeError(error_message)
 

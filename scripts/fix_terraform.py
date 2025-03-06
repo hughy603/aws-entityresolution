@@ -25,7 +25,7 @@ def fix_step_functions_tf():
     print("\n--- Fixing step-functions.tf ---")
 
     # Path to the terraform file
-    tf_file = Path("terraform/entity-resolution-pipeline/step-functions.tf")
+    tf_file = Path("terraform/modules/step-functions/main.tf")
 
     if not tf_file.exists():
         print(f"Error: {tf_file} not found")
@@ -57,7 +57,7 @@ def fix_terraform_modules():
     print("\n--- Fixing Terraform modules ---")
 
     # Path to the main.tf file
-    tf_file = Path("terraform/entity-resolution-pipeline/main.tf")
+    tf_file = Path("terraform/modules/entity-resolution-pipeline/main.tf")
 
     if not tf_file.exists():
         print(f"Error: {tf_file} not found")
@@ -88,8 +88,7 @@ def fix_snowflake_provider():
 
     # Add provider configuration in modules
     modules = [
-        "terraform/entity-resolution-pipeline/modules/snowflake_extractor",
-        "terraform/entity-resolution-pipeline/modules/snowflake_loader",
+        "terraform/modules/schema/snowflake",
     ]
 
     for module_path in modules:
@@ -134,7 +133,7 @@ def fix_entity_resolution_resources():
     print("\n--- Fixing Entity Resolution resource issues ---")
 
     # Create a fix for entity-resolution module
-    module_path = "terraform/entity-resolution-pipeline/modules/entity_resolution"
+    module_path = "terraform/modules/schema"
     provider_file = Path(f"{module_path}/providers.tf")
 
     if not provider_file.exists():

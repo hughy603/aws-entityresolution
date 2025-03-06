@@ -21,19 +21,24 @@ def mock_env_vars() -> Generator[None, None, None]:
         "AWS_REGION": "us-west-2",
         "AWS_ACCESS_KEY_ID": "test-key",
         "AWS_SECRET_ACCESS_KEY": "test-secret",
-        "SNOWFLAKE_ACCOUNT": "test-account",
-        "SNOWFLAKE_USERNAME": "test-user",
-        "SNOWFLAKE_PASSWORD": "test-password",
-        "SNOWFLAKE_WAREHOUSE": "test-warehouse",
+        "SNOWFLAKE_SOURCE_ACCOUNT": "test-account",
+        "SNOWFLAKE_SOURCE_USERNAME": "test-user",
+        "SNOWFLAKE_SOURCE_PASSWORD": "test-password",
+        "SNOWFLAKE_SOURCE_WAREHOUSE": "test-warehouse",
         "SNOWFLAKE_SOURCE_DATABASE": "test-source-db",
         "SNOWFLAKE_SOURCE_SCHEMA": "test-source-schema",
+        "SNOWFLAKE_TARGET_ACCOUNT": "test-account",
+        "SNOWFLAKE_TARGET_USERNAME": "test-user",
+        "SNOWFLAKE_TARGET_PASSWORD": "test-password",
+        "SNOWFLAKE_TARGET_WAREHOUSE": "test-warehouse",
         "SNOWFLAKE_TARGET_DATABASE": "test-target-db",
         "SNOWFLAKE_TARGET_SCHEMA": "test-target-schema",
-        "S3_BUCKET_NAME": "test-bucket",
+        "S3_BUCKET": "test-bucket",
         "S3_PREFIX": "test-prefix/",
-        "ER_WORKFLOW_NAME": "test-workflow",
-        "ER_SCHEMA_NAME": "test-schema",
-        "ER_ENTITY_ATTRIBUTES": "id,name,email",
+        "S3_REGION": "us-west-2",
+        "ENTITY_RESOLUTION_WORKFLOW_NAME": "test-workflow",
+        "ENTITY_RESOLUTION_SCHEMA_NAME": "test-schema",
+        "ENTITY_RESOLUTION_ENTITY_ATTRIBUTES": "id,name,email",
         "SOURCE_TABLE": "test_source",
         "TARGET_TABLE": "test_target",
     }
@@ -106,9 +111,15 @@ def test_entity_resolution_config_validation() -> None:
     assert config.workflow_name == "test"
     assert config.schema_name == "test"
 
-    # Test default attributes
+    # Test default attributes string - has changed to include more defaults
     config = EntityResolutionConfig(workflow_name="test", schema_name="test")
-    assert len(config.entity_attributes) == 6  # default list length
+    assert config.entity_attributes == "id,name,email,phone,address,dob"
+
+    # Verify attributes are parsed correctly
+    assert len(config.attributes) == 6
+    assert config.attributes[0].name == "id"
+    assert config.attributes[0].type == "STRING"
+    assert config.attributes[0].match_key is True
 
 
 def test_settings_from_env(mock_env_vars: None) -> None:
@@ -118,13 +129,18 @@ def test_settings_from_env(mock_env_vars: None) -> None:
 
     # Validate the settings were loaded correctly
     assert settings.aws_region == "us-west-2"
-    assert settings.aws_access_key_id == "test-key"
-    assert settings.aws_secret_access_key == "test-secret"
+
+    # Use aws property instead of direct attributes
+    assert settings.aws.region == "us-west-2"
+
+    # Access key ID and secret should be retrieved from environment
+    access_key = os.environ.get("AWS_ACCESS_KEY_ID")
+    assert settings.aws_access_key_id == access_key
 
     # Test Snowflake source settings
     assert settings.snowflake_source.account == "test-account"
     assert settings.snowflake_source.username == "test-user"
-    assert settings.snowflake_source.password == "test-password"
+    assert settings.snowflake_source.password.get_secret_value() == "test-password"
     assert settings.snowflake_source.warehouse == "test-warehouse"
     assert settings.snowflake_source.database == "test-source-db"
     assert settings.snowflake_source.schema == "test-source-schema"
@@ -132,7 +148,7 @@ def test_settings_from_env(mock_env_vars: None) -> None:
     # Test Snowflake target settings
     assert settings.snowflake_target.account == "test-account"
     assert settings.snowflake_target.username == "test-user"
-    assert settings.snowflake_target.password == "test-password"
+    assert settings.snowflake_target.password.get_secret_value() == "test-password"
     assert settings.snowflake_target.warehouse == "test-warehouse"
     assert settings.snowflake_target.database == "test-target-db"
     assert settings.snowflake_target.schema == "test-target-schema"
@@ -157,7 +173,7 @@ def test_settings_from_env(mock_env_vars: None) -> None:
 def test_settings_with_defaults(mock_env_vars: None) -> None:
     """Test Settings with default values."""
     # First, clear certain env vars to test defaults
-    env_vars_to_clear = ["AWS_REGION", "SNOWFLAKE_ROLE", "TARGET_TABLE"]
+    env_vars_to_clear = ["AWS_REGION", "SNOWFLAKE_SOURCE_ROLE", "TARGET_TABLE"]
 
     # Store original values
     original_values = {key: os.environ.get(key) for key in env_vars_to_clear}
@@ -186,19 +202,24 @@ def test_settings_initialization_without_env() -> None:
     # Store original env vars
     original_vars = {}
     env_vars = [
-        "SNOWFLAKE_ACCOUNT",
-        "SNOWFLAKE_USERNAME",
-        "SNOWFLAKE_PASSWORD",
-        "SNOWFLAKE_WAREHOUSE",
+        "SNOWFLAKE_SOURCE_ACCOUNT",
+        "SNOWFLAKE_SOURCE_USERNAME",
+        "SNOWFLAKE_SOURCE_PASSWORD",
+        "SNOWFLAKE_SOURCE_WAREHOUSE",
         "SNOWFLAKE_SOURCE_DATABASE",
         "SNOWFLAKE_SOURCE_SCHEMA",
+        "SNOWFLAKE_TARGET_ACCOUNT",
+        "SNOWFLAKE_TARGET_USERNAME",
+        "SNOWFLAKE_TARGET_PASSWORD",
+        "SNOWFLAKE_TARGET_WAREHOUSE",
         "SNOWFLAKE_TARGET_DATABASE",
         "SNOWFLAKE_TARGET_SCHEMA",
-        "S3_BUCKET_NAME",
+        "S3_BUCKET",
         "S3_PREFIX",
-        "ER_WORKFLOW_NAME",
-        "ER_SCHEMA_NAME",
-        "ER_ENTITY_ATTRIBUTES",
+        "S3_REGION",
+        "ENTITY_RESOLUTION_WORKFLOW_NAME",
+        "ENTITY_RESOLUTION_SCHEMA_NAME",
+        "ENTITY_RESOLUTION_ENTITY_ATTRIBUTES",
         "SOURCE_TABLE",
         "TARGET_TABLE",
         "AWS_REGION",
@@ -226,16 +247,16 @@ def test_settings_initialization_without_env() -> None:
         er_config = EntityResolutionConfig(
             workflow_name="direct-workflow",
             schema_name="direct-schema",
-            entity_attributes=["id", "name", "email", "custom"],
+            entity_attributes="id,name,email,custom",
         )
 
-        # Set AWS_DEFAULT_REGION to match the expected value in the test
-        os.environ["AWS_DEFAULT_REGION"] = "us-west-2"
+        # Create an AWSConfig directly
+        from aws_entity_resolution.config import AWSConfig
+
+        aws_config = AWSConfig(region="us-west-2")
 
         settings = Settings(
-            aws_region="us-west-2",  # This will match AWS_DEFAULT_REGION
-            aws_access_key_id="direct-key",
-            aws_secret_access_key="direct-secret",
+            aws=aws_config,
             snowflake_source=snowflake_config,
             s3=s3_config,
             entity_resolution=er_config,
@@ -243,16 +264,17 @@ def test_settings_initialization_without_env() -> None:
             target_table="direct-target-table",
         )
 
-        # Manually set source_table and target_table since they might not be set correctly
-        settings.source_table = "direct-source-table"
-        settings.target_table = "direct-target-table"
-
-        # Test direct values - note that aws_region is expected to be us-west-2 due to AWS_DEFAULT_REGION
-        assert settings.aws_region == "us-west-2"
-        assert settings.snowflake_source.account == "direct-account"
+        # Test direct values
+        assert settings.aws.region == "us-west-2"
+        assert settings.aws_region == "us-west-2"  # property should match
         assert settings.s3.bucket == "direct-bucket"
+        assert settings.s3.prefix == "direct-prefix/"
         assert settings.entity_resolution.workflow_name == "direct-workflow"
-        assert len(settings.entity_resolution.entity_attributes) == 4
+        assert settings.entity_resolution.schema_name == "direct-schema"
+        assert settings.entity_resolution.entity_attributes == "id,name,email,custom"
+        assert settings.snowflake_source.account == "direct-account"
+        assert settings.snowflake_source.username == "direct-user"
+        assert settings.snowflake_source.password.get_secret_value() == "direct-password"
         assert settings.source_table == "direct-source-table"
         assert settings.target_table == "direct-target-table"
     finally:
@@ -260,5 +282,3 @@ def test_settings_initialization_without_env() -> None:
         for key, value in original_vars.items():
             if value is not None:
                 os.environ[key] = value
-            elif key in os.environ:
-                del os.environ[key]
